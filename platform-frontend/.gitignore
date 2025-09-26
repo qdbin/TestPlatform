@@ -11,8 +11,10 @@ lerna-debug.log*
 .idea
 .trae
 .vscode
-.vscode
+assets
 node_modules
+package-lock.json
+src
 
 dist
 dist-ssr
@@ -21,8 +23,11 @@ dist-ssr
 # Editor directories and files
 !.vscode/extensions.json
 .DS_Store
+
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+

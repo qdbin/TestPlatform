@@ -1,7 +1,62 @@
 import { defineConfig } from 'vite'
-import vue from '@vitejs/plugin-vue'
+import vue from '@vitejs/plugin-vue2'
+import { resolve } from 'path'
+import commonjs from 'vite-plugin-commonjs'
 
-// https://vite.dev/config/
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), commonjs()],
+  
+  // 开发服务器配置
+  server: {
+    port: 8888,
+    host: '0.0.0.0',
+    open: true,
+    // 代理配置 - 保持与原项目一致
+    proxy: {
+      '/autotest': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        ws: true
+      },
+      '/openapi': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true
+      },
+      '/websocket': {
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        ws: true
+      }
+    }
+  },
+  
+  // 路径别名配置 - 保持与原来一致
+  resolve: {
+    alias: {
+      '@': resolve(__dirname, 'src'),
+      '~@': resolve(__dirname, 'src')
+    },
+    extensions: ['.js', '.vue', '.json']
+  },
+  
+  // 构建配置
+  build: {
+    outDir: 'dist',
+    assetsDir: 'static',
+    sourcemap: false,
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html')
+      }
+    }
+  },
+  
+  // CSS配置
+  css: {
+    preprocessorOptions: {
+      scss: {
+        additionalData: `@import "@/styles/variables.scss";`
+      }
+    }
+  }
 })

@@ -1,21 +1,44 @@
 {
-  "name": "frontend-package",
+  "name": "liuma-vite",
+  "version": "2.0.0",
+  "description": "LiuMa frontend with Vite",
+  "author": "Chras fu",
   "private": true,
-  "version": "0.0.0",
-  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint src --ext .js,.vue",
+    "lint:fix": "eslint src --ext .js,.vue --fix",
+    "format": "prettier --write src/**/*.{js,vue,css,html}"
   },
   "dependencies": {
-    "vue": "^3.5.21"
+    "axios": "^1.6.2",
+    "brace": "^0.11.1",
+    "echarts": "^5.4.3",
+    "element-resize-detector": "^1.2.4",
+    "element-ui": "^2.15.13",
+    "jmuxer": "^2.0.5",
+    "jquery": "^3.7.1",
+    "js-base64": "^3.7.5",
+    "js-md5": "^0.8.3",
+    "jsoneditor": "^9.5.3",
+    "jsonpath": "^1.1.1",
+    "sortablejs": "^1.14.0",
+    "vue": "^2.7.16",
+    "vue-json-editor": "^1.4.3",
+    "vue-router": "^3.6.5",
+    "vue2-ace-editor": "^0.0.15",
+    "vuex": "^3.6.2"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^6.0.1",
-    "vite": "npm:rolldown-vite@7.1.12"
-  },
-  "overrides": {
-    "vite": "npm:rolldown-vite@7.1.12"
+    "@originjs/vite-plugin-commonjs": "^1.0.3",
+    "@vitejs/plugin-vue2": "^2.3.1",
+    "eslint": "^9.36.0",
+    "eslint-plugin-vue": "^10.5.0",
+    "prettier": "^3.6.2",
+    "sass": "^1.69.5",
+    "vite": "^4.5.0",
+    "vite-plugin-commonjs": "^0.10.4"
   }
 }
