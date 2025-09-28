@@ -37,7 +37,7 @@ new Vue({
     render: h => h(App),
     data: {
         // 空的实例放到根组件下，所有的子组件都能调用
-        Bus: new Vue()
+        Bus: new Vue()  // 创建一个新的Vue实例作为事件总线
     }
 }).$mount('#app')
 
