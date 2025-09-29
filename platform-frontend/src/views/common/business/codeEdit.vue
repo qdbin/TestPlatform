@@ -5,7 +5,9 @@
 <script>
     export default {
       name: "CodeEdit",
-      components: { editor: require('vue2-ace-editor')},
+      components: { 
+        editor: () => import('vue2-ace-editor')
+      },
       props: {
         data:  {
           type:String
@@ -56,15 +58,20 @@
       },
       methods: {
         editorInit: function (editor) {
-          require('brace/ext/language_tools') //language extension prerequsite...
-          this.modes.forEach(mode => {
-            require('brace/mode/' + mode); //language
+          // 使用 Promise.all 并行加载所有需要的 brace 模块
+          Promise.all([
+            import('brace/ext/language_tools'),  // 代码提示工具
+            ...this.modes.map(mode => import(`brace/mode/${mode}`)),  // 各种语言模式
+            import(`brace/theme/${this.theme}`),  // 主题
+            import('brace/snippets/javascript')  // JavaScript 代码片段
+          ]).then(() => {
+            // 所有模块加载完成后，设置编辑器为只读模式（如果需要）
+            if (this.readOnly) {
+              editor.setReadOnly(true);
+            }
+          }).catch(err => {
+            console.error('Failed to load brace modules:', err);
           });
-          require('brace/theme/' + this.theme)
-          require('brace/snippets/javascript') //snippet
-          if (this.readOnly) {
-            editor.setReadOnly(true);
-          }
         },
       }
     }

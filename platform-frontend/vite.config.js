@@ -58,5 +58,27 @@ export default defineConfig({
         additionalData: `@import "@/styles/variables.scss";`
       }
     }
+  },
+  
+  // 优化CommonJS模块导入 - 解决不符CommonJS模块动态导入的相关兼容性问题-可删
+  optimizeDeps: {
+    include: [
+      'element-resize-detector',
+      'vue2-ace-editor',
+      'jmuxer',
+      'js-base64',
+      'brace',
+      'brace/ext/language_tools',
+      'brace/mode/text',
+      'brace/mode/xml',
+      'brace/mode/html',
+      'brace/mode/python',
+      'brace/mode/sql',
+      'brace/mode/javascript',
+      'brace/mode/json',
+      'brace/theme/chrome',
+      'brace/snippets/javascript',
+      'brace/ext/searchbox'
+    ]
   }
 })
