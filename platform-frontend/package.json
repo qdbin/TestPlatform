@@ -22,11 +22,11 @@
     "jquery": "^3.7.1",
     "js-base64": "^3.7.5",
     "js-md5": "^0.8.3",
+    "json-editor-vue": "^0.18.1",
     "jsoneditor": "^9.5.3",
     "jsonpath": "^1.1.1",
     "sortablejs": "^1.14.0",
     "vue": "^2.7.16",
-    "vue-json-editor": "^1.4.3",
     "vue-router": "^3.6.5",
     "vue2-ace-editor": "^0.0.15",
     "vuex": "^3.6.2"
