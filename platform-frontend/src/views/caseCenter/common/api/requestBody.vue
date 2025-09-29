@@ -37,8 +37,7 @@
         </div>
         <!-- json格式数据 -->
         <div v-if="reqBody.type==='json'" class="req-json-editor">
-            <vue-json-editor style="height:480px;" v-model="jsonData" :showBtns="false" mode="code"
-                    lang="zh" @json-change="onJsonChange"/>
+            <json-editor-vue style="height:480px;" v-model="jsonData" :mainMenuBar="false" mode="text" />
         </div>
         <!-- raw格式数据 -->
         <div v-if="reqBody.type === 'text' || reqBody.type === 'xml' ||reqBody.type === 'html'">
@@ -51,13 +50,13 @@
     </div>
 </template>
 <script>
-import vueJsonEditor from 'vue-json-editor'
+import JsonEditorVue from 'json-editor-vue'
 import RequestForm from './requestForm';
 import RequestFile from './requestFile';
 import CodeEdit from '@/views/common/business/codeEdit'
 
 export default {
-    components: { RequestForm, RequestFile, CodeEdit, vueJsonEditor },
+    components: { RequestForm, RequestFile, CodeEdit, JsonEditorVue },
     name: 'RequestHeader',
     props:{
         reqBody:Object,
@@ -92,9 +91,6 @@ export default {
         }
     },
     methods: {
-        onJsonChange(value){
-            this.reqBody.json = JSON.stringify(value);
-        },
         changeRaw(command){
             this.rawType = command;
             this.reqBody.type = command;

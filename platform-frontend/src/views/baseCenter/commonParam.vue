@@ -105,7 +105,7 @@
               </el-row>
             </div>
             <div class="req-json-editor" v-else-if="editParamForm.dataType==='JSONObject' || editParamForm.dataType==='JSONArray'" >
-              <vue-json-editor style="height:200px; width: 90%" v-model="jsonData" :showBtns="false" mode="code" lang="zh" @json-change="onJsonChange" @has-error="onJsonError"/>
+              <json-editor-vue style="height:200px; width: 90%" v-model="jsonData" :mainMenuBar="false" mode="text" />
             </div>
             <el-input v-else size="small" style="width: 90%" v-model="editParamForm.paramData" :autosize="{ minRows: 6}" type="textarea" clearable placeholder="请输入参数值"/>
           </el-form-item>
@@ -123,10 +123,10 @@
 
 <script>
 import Pagination from '../common/components/pagination'
-import vueJsonEditor from 'vue-json-editor'
+import JsonEditorVue from 'json-editor-vue'
 import {timestampToTime} from '@/utils/util'
 export default {
-  components: { Pagination, vueJsonEditor },
+  components: { Pagination, JsonEditorVue },
   data() {
     return{
       title: "新增参数",
@@ -362,9 +362,6 @@ export default {
     },
     onJsonChange(value){
       this.editParamForm.paramData = JSON.stringify(value);
-    },
-    onJsonError(){
-      this.editParamForm.paramData = "";
     },
     changeDataType(value){
       if(value === "JSONObject"){

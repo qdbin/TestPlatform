@@ -6,8 +6,7 @@
         <el-row :gutter="10">
             <el-col :span="12">
                 <div class="req-json-editor">
-                    <vue-json-editor style="height:478px;" v-model="jsonData" :showBtns="false" mode="code"
-                    lang="zh" @json-change="onJsonChange"/>
+                    <json-editor-vue style="height:478px;" v-model="jsonData" :mainMenuBar="false" mode="text" />
                 </div>
             </el-col>
             <el-col :span="12">
@@ -19,7 +18,7 @@
     </div>
 </template>
 <script>
-import vueJsonEditor from 'vue-json-editor'
+import JsonEditorVue from 'json-editor-vue'
 import JsonTree from './jsonTree'
 import {toJsonPath} from '@/utils/jsonPath'
 export default {
@@ -27,7 +26,7 @@ export default {
     props:{
         apiId: String,
     },
-    components: { vueJsonEditor, JsonTree },
+    components: { JsonEditorVue, JsonTree },
     data() {
         return{
             jsonData:{},
@@ -52,13 +51,17 @@ export default {
                 }
             });
         },
-        onJsonChange(value){
-            this.jsonData = value;
-            this.treeData.splice(0, this.treeData.length);
-            toJsonPath(this.treeData, this.jsonData, "$");
-        },
         addContent(item){
             this.$emit('addContent', item);
+        }
+    },
+    watch:{
+        jsonData: {
+            handler(newVal) {
+                this.treeData.splice(0, this.treeData.length);
+                toJsonPath(this.treeData, newVal, "$");
+            },
+            deep: true
         }
     }
 }
