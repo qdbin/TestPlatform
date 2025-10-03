@@ -1,10 +1,11 @@
-package cn.testplatform;
+package com.autotest;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
+
 @SpringBootTest
-class TestPlatformApplicationTests {
+class AutoTestApplicationTests {
 
     @Test
     void contextLoads() {
