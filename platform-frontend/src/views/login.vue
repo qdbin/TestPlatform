@@ -1,3 +1,6 @@
+/**
+ * 登录组件（登录与注册，支持记住密码与路由回跳）
+ */
 <template>
   <div class="login-wrap">
     <div class="welcome-title">
@@ -5,12 +8,13 @@
       <!-- <img class="logoimg" src="../assets/img/logo.png"> -->
       <span>A P I 自 动 化 测 试 平 台</span>
     </div>
+    <!-- 登录表单：双向绑定loginForm并应用校验规则 -->
     <el-form label-position="left" :model="loginForm" :rules="rules" ref="loginForm" label-width="0px" class="demo-loginForm login-container">
       <h3 class="title">登录</h3>
-      <el-form-item prop="account">
+      <el-form-item prop="account"> <!-- 账号输入：绑定loginForm.account -->
         <el-input type="text" id="username" v-model="loginForm.account" placeholder="账号/手机号"></el-input>
       </el-form-item>
-      <el-form-item prop="password">
+      <el-form-item prop="password"> <!-- 密码输入：回车触发提交 -->
         <el-input type="password" id="password" v-model="loginForm.password" @keyup.enter.native="submitForm('loginForm')" placeholder="密码"></el-input>
       </el-form-item>
       <el-row style="margin-top: -10px">
@@ -21,10 +25,11 @@
           <el-button type="text" style="float:right" @click="registerVisible = true">立即注册</el-button>
         </el-col>
       </el-row>
-      <el-form-item style="width:100%; margin-top:20px">
+      <el-form-item style="width:100%; margin-top:20px"> <!-- 提交按钮：显示加载态 -->
         <el-button type="primary" id="login" style="width:100%;" @click="submitForm('loginForm')" :loading="logining">登录</el-button>
       </el-form-item>
     </el-form>
+    <!-- 注册弹窗：同步可见性并销毁关闭内容 -->
     <el-dialog title="注册用户" :visible.sync="registerVisible" width="450px" destroy-on-close>
       <el-form ref="registerForm" :rules="rules" :model="registerForm" label-width="80px">
           <el-form-item label="登录账号" prop="newAccount">
@@ -57,7 +62,8 @@
 import { setCookie, getCookie, delCookie } from '../utils/util'
 
 export default {
-  name: 'login',
+  name: 'login', // 组件名称：登录页
+  // 表单与校验规则定义
   data() {
     var validateMobile = (rule, value, callback) => {
       if(value.length !== 11 || !(/^(((13[0-9]{1})|(14[0-9]{1})|(15[0-9]{1})|(16[0-9]{1})|(17[0-9]{1})|(18[0-9]{1})|(19[0-9]{1})|)+\d{8})$/.test(value))) {
@@ -102,6 +108,7 @@ export default {
       sendText: "获取验证码",
       countdown: 60,
       timer: null,
+      // 表单校验规则：账号/密码/手机号/昵称/邮箱
       rules: {
         account: [{ required: true, message: '账号不能为空', trigger: 'blur' }],
         password: [{ required: true, message: '密码不能为空', trigger: 'blur' }],
@@ -117,8 +124,9 @@ export default {
       }
     }
   },
+  // 初始化生命周期：尝试读取cookie以回填表单
   created() {
-    // 获取存在本地的用户名密码
+    // 初始化：从cookie读取账号与密码
     this.getuserpwd()
   },
   methods: {
@@ -131,12 +139,13 @@ export default {
       }
     },
 
-    // 注册用户
+    // 注册用户：校验注册表单并提交
     registerUser(){
+      // 关键步骤：校验通过后对密码进行Base64编码
       this.$refs["registerForm"].validate(valid => {
           if (valid) {
               let url = '/autotest/register';
-              // 导入Base64，并encode密码
+              // 导入Base64，并encode密码（传输安全性基础处理）
               let Base64 = require('js-base64').Base64;
               this.registerForm.password = Base64.encode(this.registerForm.newPassword);
               this.registerForm.account = this.registerForm.newAccount;  
@@ -154,11 +163,12 @@ export default {
       })
     },
 
-    // 提交表单-提交表单
+    // 提交登录：校验通过后编码密码并请求登录
     submitForm(formName) {
       this.$refs[formName].validate(valid => {
         if (valid) {
           this.logining = true;
+          // 关键步骤：密码进行Base64编码后再提交
           let Base64 = require('js-base64').Base64;
           let loginForm = {
             account: this.loginForm.account,
@@ -181,6 +191,7 @@ export default {
               this.$store.commit('set_userInfo', response.data.data);
               setTimeout(() => {
                 this.logining = false;
+                // 关键步骤：根据重定向参数决定跳转目标
                 if(this.$router.currentRoute.query.redirect){
                   this.$router.push({ path: this.$router.currentRoute.query.redirect});
                 }else{
@@ -201,50 +212,51 @@ export default {
 </script>
 
 <style scoped>
+/* 登录页外层容器：铺满窗口并控制背景展示 */
 .login-wrap {
-  box-sizing: border-box;
-  width: 100%;
-  height: 100%;
-  padding-top: 10%;
+  box-sizing: border-box; /* 统一盒模型 */
+  width: 100%; /* 充满宽度 */
+  height: 100%; /* 充满高度 */
+  padding-top: 10%; /* 顶部留白 */
   /* background-color: #112346; */
-  background-repeat: no-repeat;
-  background-position: center right;
-  background-size: 100%;
+  background-repeat: no-repeat; /* 背景不重复 */
+  background-position: center right; /* 背景定位 */
+  background-size: 100%; /* 背景缩放 */
 }
 .welcome-title{
-  font-family: initial;
-  text-align: center;
-  font-size: 36px;
-  margin-bottom: 40px;
+  font-family: initial; /* 字体族 */
+  text-align: center; /* 居中 */
+  font-size: 36px; /* 标题字号 */
+  margin-bottom: 40px; /* 底部间距 */
 }
 .footer{
-  position: fixed;
-  font-size: 12px;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  position: fixed; /* 固定在底部 */
+  font-size: 12px; /* 字号 */
+  left: 0; /* 左侧对齐 */
+  right: 0; /* 右侧对齐 */
+  bottom: 0; /* 底部对齐 */
 }
 .login-container {
-  border-radius: 10px;
-  margin: 0px auto;
-  width: 350px;
-  padding: 30px 35px 15px 35px;
-  background: #fff;
-  border: 1px solid #eaeaea;
-  text-align: left;
-  box-shadow: 0 0 20px 2px rgba(0, 0, 0, 0.1);
+  border-radius: 10px; /* 圆角 */
+  margin: 0px auto; /* 居中 */
+  width: 350px; /* 宽度 */
+  padding: 30px 35px 15px 35px; /* 内边距 */
+  background: #fff; /* 背景白色 */
+  border: 1px solid #eaeaea; /* 边框 */
+  text-align: left; /* 左对齐 */
+  box-shadow: 0 0 20px 2px rgba(0, 0, 0, 0.1); /* 阴影 */
 }
 .title {
-  margin: 0px auto 40px auto;
-  text-align: center;
-  color: #505458;
+  margin: 0px auto 40px auto; /* 上左右下间距 */
+  text-align: center; /* 居中 */
+  color: #505458; /* 颜色 */
 }
 .remember {
-  margin: 11px 0px 0px 0px;
+  margin: 11px 0px 0px 0px; /* 外边距 */
 }
 .logoimg{
-  width: 40px;
-  height: 40px;
-  margin-bottom: 4px;
+  width: 40px; /* 宽度 */
+  height: 40px; /* 高度 */
+  margin-bottom: 4px; /* 底部间距 */
 }
 </style>
