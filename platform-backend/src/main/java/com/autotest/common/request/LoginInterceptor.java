@@ -29,7 +29,8 @@ public class LoginInterceptor implements HandlerInterceptor {
         String path = request.getServletPath();
         if (path.matches(RequestPath.LOGIN_PATH.path) || path.matches(RequestPath.ENGINE_TOKEN_PATH.path)
                 || path.matches(RequestPath.REGISTER_PATH.path) || path.matches(RequestPath.SCREENSHOT_PATH.path)
-                || path.matches(RequestPath.DOWNLOAD_PATH.path) || path.matches(RequestPath.RUN_PATH.path)) {
+                || path.matches(RequestPath.DOWNLOAD_PATH.path) || path.matches(RequestPath.RUN_PATH.path)
+                || path.matches(RequestPath.API_DOC.path) || path.matches(RequestPath.SWAGGER_UI.path)) {
             // 平台登录注册接口 引擎获取token接口 测试截图预览 不用拦截
             return true;
         } else if (path.matches(RequestPath.ENGINE_PATH.path)){

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.autotest.mapper.PlanNoticeMapper">
+  <insert id="addPlanNotice" parameterType="com.autotest.domain.PlanNotice">
+    insert into plan_notice (id, plan_id, notification_id, `condition`)
+    values (#{id}, #{planId}, #{notificationId}, #{condition})
+  </insert>
+  <update id="updatePlanNotice" parameterType="com.autotest.domain.PlanNotice">
+    update plan_notice set
+    <if test="notificationId !=null">
+      notification_id = #{notificationId},
+    </if>
+    <if test="condition !=null">
+      `condition` = #{condition}
+    </if>
+    where plan_id=#{planId}
+  </update>
+  <select id="getPlanNotice" parameterType="java.lang.String" resultType="com.autotest.domain.PlanNotice">
+    select * from plan_notice where plan_id = #{planId}
+  </select>
+</mapper>
