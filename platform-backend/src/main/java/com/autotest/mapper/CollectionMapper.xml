@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.autotest.mapper.CollectionMapper">
+  <insert id="addCollection" parameterType="com.autotest.domain.Collection">
+    insert into collection (id, name, device_id, version_id, project_id, description, create_time, update_time, create_user, update_user)
+    values (#{id}, #{name}, #{deviceId}, #{versionId}, #{projectId},#{description},#{createTime}, #{updateTime}, #{createUser}, #{updateUser})
+  </insert>
+  <update id="updateCollection" parameterType="com.autotest.domain.Collection">
+    update collection set name=#{name}, device_id=#{deviceId}, version_id=#{versionId}, description=#{description},
+    update_time=#{updateTime}, update_user=#{updateUser} where id=#{id}
+  </update>
+  <update id="deleteCollection" parameterType="java.lang.String">
+    update collection set `status`=0 where id = #{id}
+  </update>
+  <select id="getCollectionDetail" parameterType="java.lang.String" resultType="com.autotest.dto.CollectionDTO">
+    select col.id, col.name, col.device_id, col.version_id, col.description, col.project_id, col.create_time, col.update_time,
+    col.create_user, col.update_user, v.name as versionName from collection col
+    left join version v on v.id = col.version_id where col.id = #{id}
+  </select>
+  <select id="getCollectionList" parameterType="com.autotest.request.QueryRequest" resultType="com.autotest.dto.CollectionDTO">
+    select col.id, col.name, col.device_id, col.version_id, col.description, col.project_id, col.create_time, col.update_time,
+    col.create_user, col.update_user, u.username as username, v.name as versionName
+    from collection col left join user u on u.id = col.create_user left join version v on v.id = col.version_id
+    where col.project_id = #{projectId}
+    <if test="condition != null and condition != ''">
+      and col.name like #{condition}
+    </if>
+    and col.`status`=1
+    order by col.update_time desc
+  </select>
+</mapper>
