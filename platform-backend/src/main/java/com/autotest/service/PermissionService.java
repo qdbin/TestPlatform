@@ -34,7 +34,7 @@ public class PermissionService {
      * @return List<MenuDTO> // 菜单树（父子结构）
      */
     public List<MenuDTO> getMenus(String userId, String projectId) {
-        List<String> permissions = permissionMapper.getUserPermissionByProject(projectId, userId);
+        List<String> permissions = permissionMapper.getUserPermissionByProject(projectId, userId);      // 获得用户对应的权限list
         List<MenuDTO> menuDTOS = new ArrayList<>();
         MenuEnum[] menuList = MenuEnum.values();
         for (MenuEnum menu:menuList){

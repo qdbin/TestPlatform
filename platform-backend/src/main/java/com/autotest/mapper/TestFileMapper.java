@@ -45,7 +45,7 @@ public interface TestFileMapper {
     List<TestFile> getAllTestFile(String projectId);
 
     /**
-     * 条件查询测试文件列表
+     * 条件查询测试文件列表(连user表查询，附加username)
      *
      * @param projectId          // 项目ID
      * @param condition          // 关键字（支持模糊）

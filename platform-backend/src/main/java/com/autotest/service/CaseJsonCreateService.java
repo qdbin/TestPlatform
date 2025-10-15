@@ -109,28 +109,40 @@ public class CaseJsonCreateService {
      * @param testCollectionList   // 测试集合-用例列表，用于生成对应 JSON 文件
      * @return String              // 压缩包下载路径（相对路径）
      *
-     * 示例: 入参(task, collections) -> 调用本方法循环写入 JSON -> 返回 "/openapi/task/file/download/{taskId}"。
      */
     public String getDownloadUrl(TaskDTO task, List<TaskTestCollectionResponse> testCollectionList){
-        String taskFilePath = TASK_FILE_PATH+"/"+task.getProjectId()+"/"+task.getId();
-        String taskZipPath = TASK_FILE_PATH+"/"+task.getProjectId();
+        String taskFilePath = TASK_FILE_PATH+"/"+task.getProjectId()+"/"+task.getId();              // taskFilePath = /$test_file_path/projectId/taskId/
+        String taskZipPath = TASK_FILE_PATH+"/"+task.getProjectId();                                // taskZipPath = /$test_file_path/projectId/
+
+        // zipFileName = task_id
         String zipFileName = task.getId();
+
+        // 遍历 test_collection_list
         for(TaskTestCollectionResponse taskTestCollection: testCollectionList){
-            String collectionFilePath = taskFilePath +"/"+ taskTestCollection.getCollectionId();
+            String collectionFilePath = taskFilePath +"/"+ taskTestCollection.getCollectionId();    // collectionFilePath = /taskFilePath/collectionId/
+
+            // 遍历test_case_list
             for(TaskTestCaseResponse taskTestCase:taskTestCollection.getTestCaseList()){
+                // 生成case_api.json
                 if(taskTestCase.getCaseType().equals("API")) {
-                    // 生成 API 用例 JSON
+                    // 获得case_api_response（即debug_data.json）
                     TestCaseApiResponse testCase = this.getApiTestCaseJson(task.getEnvironmentId(), task.getSourceType(), taskTestCase);
                     JSONObject taskCase = JSONObject.parseObject(JSONObject.toJSONString(testCase, SerializerFeature.WriteMapNullValue), Feature.OrderedField);
                     // 同一个集合下同一条用例文件重复就覆盖 因数据一样没必要生成两份
                     FileUtils.createJsonFile(taskCase, collectionFilePath + "/" + testCase.getCaseId() + ".json");
-                }else if(taskTestCase.getCaseType().equals("WEB")){ // WEB用例
+                }
+
+                // web
+                else if(taskTestCase.getCaseType().equals("WEB")){ // WEB用例
                     // 生成 WEB 用例 JSON
                     TestCaseWebResponse testCase = this.getWebTestCaseJson(task.getEnvironmentId(),task.getSourceType(), taskTestCase);
                     JSONObject taskCase = JSONObject.parseObject(JSONObject.toJSONString(testCase, SerializerFeature.WriteMapNullValue), Feature.OrderedField);
                     // 同一个集合下同一条用例文件重复就覆盖 因数据一样没必要生成两份
                     FileUtils.createJsonFile(taskCase, collectionFilePath + "/" + testCase.getCaseId() + ".json");
-                }else { // APP用例
+                }
+
+                // app
+                else { // APP用例
                     // 生成 APP 用例 JSON
                     TestCaseAppResponse testCase = this.getAppTestCaseJson(taskTestCollection.getDeviceId(), task.getSourceType(), taskTestCase);
                     JSONObject taskCase = JSONObject.parseObject(JSONObject.toJSONString(testCase, SerializerFeature.WriteMapNullValue), Feature.OrderedField);
@@ -439,7 +451,7 @@ public class CaseJsonCreateService {
                 apiData.setPath(apiDTO.getPath());
                 apiData.setMethod(apiDTO.getMethod());
                 apiData.setProtocol(apiDTO.getProtocol());
-                // 拼接header
+                // 拼接header（公用和case_api私用的请求头）
                 apiData.setHeaders(this.getApiHeader(caseRequest.getCommonParam().getString("header"), caseApiRequest.getHeader()));
                 // 拼接proxy（根据controller字典中获得）
                 apiData.setProxies(this.getApiProxy(caseRequest.getCommonParam().getString("proxy"), caseApiRequest.getController()));
@@ -462,9 +474,12 @@ public class CaseJsonCreateService {
         // case类型
         else {
             CaseDTO caseDTO = caseMapper.getCaseDetail(taskTestCase.getCaseId());
-            testCaseApi.setComment(caseDTO.getDescription());
-            testCaseApi.setCaseId(taskTestCase.getCaseId());
-            testCaseApi.setCaseName(caseDTO.getName());
+            // 基本信息
+            testCaseApi.setComment(caseDTO.getDescription());   //comment
+            testCaseApi.setCaseId(taskTestCase.getCaseId());    // case_id
+            testCaseApi.setCaseName(caseDTO.getName());         // case_name
+
+            // case_common_params
             JSONObject commonParam = JSONObject.parseObject(caseDTO.getCommonParam());
             // 组装自定义函数
             testCaseApi.setFunctions(this.getCaseFunctions(commonParam.getJSONArray("functions")));
@@ -936,43 +951,58 @@ public class CaseJsonCreateService {
      * @return List<TaskTestCollectionResponse> // 测试集合列表
      */
     public List<TaskTestCollectionResponse> getTaskTestCollectionList(TaskDTO task) {
-        // 获取每次测试所需的测试任务用例 按照测试集合列表-测试集合(集合下用例列表)-测试用例 维度给出
-        // 用例调试以临时数据id为集合id-用例id
-        // 用例执行以用例id为 集合id-用例id 都只有一个集合一个用例
-        // 集合执行只有一个集合 多条用例 计划执行有多个集合 多条用例
 
-        // 测试集合
+        // 组装test_collection_list
         List<TaskTestCollectionResponse> taskTestCollectionList = new ArrayList<>();
 
-        // plan类型task
+        // plan类型task（与collection一致，遍历plan的collection进行组装）
         if(task.getSourceType().equals(ReportSourceType.PLAN.toString())){
+            // 根据collection_id获得test_case_list
             List<PlanCollectionDTO> planCollections = planCollectionMapper.getPlanCollectionList(task.getSourceId());
             for(PlanCollectionDTO planCollectionDTO:planCollections){
+                // 组装单个test_collection
                 TaskTestCollectionResponse taskTestCollection = new TaskTestCollectionResponse();
                 taskTestCollection.setCollectionId(planCollectionDTO.getCollectionId());
+
+                // 获得单个collection_dto
                 Collection collection = collectionMapper.getCollectionDetail(planCollectionDTO.getCollectionId());
                 if(collection==null) return taskTestCollectionList;
+
+                // 设置device_id
                 if(this.getDeviceCouldUsing(collection.getDeviceId(), task.getId())){
                     taskTestCollection.setDeviceId(collection.getDeviceId());
                 }else {
                     taskTestCollection.setDeviceId(null);
                 }
                 taskTestCollection.setDeviceId(collection.getDeviceId());
+
+                // 根据collection_id组装test_case_list
                 List<TaskTestCaseResponse> taskTestCaseList = this.getTaskTestCaseList(planCollectionDTO.getCollectionId());
                 taskTestCollection.setTestCaseList(taskTestCaseList);
+
+                // 添加test_collection到test_collection_list
                 taskTestCollectionList.add(taskTestCollection);
             }
         }
 
         // collection类型task
         else if(task.getSourceType().equals(ReportSourceType.COLLECTION.toString())){
+            // 组装test_collection
             TaskTestCollectionResponse taskTestCollection = new TaskTestCollectionResponse();
-            taskTestCollection.setCollectionId(task.getSourceId());
+            taskTestCollection.setCollectionId(task.getSourceId());                             // collection_id=source_id=collection_id
+
+            // 获得collection_dto
             Collection collection = collectionMapper.getCollectionDetail(task.getSourceId());
             if(collection==null) return taskTestCollectionList;
+
+            // 设置device_id
             taskTestCollection.setDeviceId(task.getDeviceId());
+
+            // 根据collection_id组装test_case_list
             List<TaskTestCaseResponse> taskTestCaseList = this.getTaskTestCaseList(task.getSourceId());
             taskTestCollection.setTestCaseList(taskTestCaseList);
+
+            // 添加test_collection到test_collection_list
             taskTestCollectionList.add(taskTestCollection);
         }
 
@@ -980,10 +1010,10 @@ public class CaseJsonCreateService {
         else if(task.getSourceType().equals(ReportSourceType.CASE.toString())){
             // 新增test_collection
             TaskTestCollectionResponse taskTestCollection = new TaskTestCollectionResponse();
-            taskTestCollection.setCollectionId(task.getSourceId());
+            taskTestCollection.setCollectionId(task.getSourceId());             // collection_id=source_id=case_id
             taskTestCollection.setDeviceId(task.getDeviceId());
 
-            // 新增test_case_List
+            // 组装test_case_List
             List<TaskTestCaseResponse> taskTestCaseList = new ArrayList<>();
             TaskTestCaseResponse taskTestCase = new TaskTestCaseResponse();
             taskTestCase.setIndex(1L);                                          // index序号
@@ -1000,13 +1030,13 @@ public class CaseJsonCreateService {
 
         // temp类型task
         else if(task.getSourceType().equals(ReportSourceType.TEMP.toString())){
-            // 获取临时的Debug数据
+            // 获取临时的Debug数据，主要获得对应的case_type
             DebugData debugData = debugDataMapper.getDebugData(task.getSourceId());
             CaseRequest caseRequest = JSONObject.parseObject(debugData.getData(), CaseRequest.class);
 
             // 新增tset_collection
             TaskTestCollectionResponse taskTestCollection = new TaskTestCollectionResponse();
-            taskTestCollection.setCollectionId(task.getSourceId());             // collectionId=taskId
+            taskTestCollection.setCollectionId(task.getSourceId());             // collectionId=sourceId=debug_data_id
             taskTestCollection.setDeviceId(task.getDeviceId());                 // 设备id(App)
 
             // 新增test_case_List
@@ -1032,8 +1062,10 @@ public class CaseJsonCreateService {
      * @return List<TaskTestCaseResponse> // 用例索引列表（含顺序与类型）
      */
     private List<TaskTestCaseResponse> getTaskTestCaseList(String collectionId){
-        // 获取任务集合下的用例列表
+        // 获取collection下的case_list
         List<CollectionCaseDTO> collectionCases = collectionCaseMapper.getCollectionCaseList(collectionId);
+
+        // 组装test_case_list
         List<TaskTestCaseResponse> taskTestCaseList = new ArrayList<>();
         for(CollectionCaseDTO collectionCaseDTO:collectionCases){
             TaskTestCaseResponse taskTestCase = new TaskTestCaseResponse();

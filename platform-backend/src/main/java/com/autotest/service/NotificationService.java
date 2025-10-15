@@ -99,10 +99,12 @@ public class NotificationService {
         }else {
             taskType = "定时任务";
         }
+
         // 查询报告与用户信息，准备模板变量
         ReportDTO report = reportMapper.getReportDetail(task.getReportId());
         User user = userMapper.getUserInfo(task.getCreateUser());
         Long during = (report.getEndTime() - report.getStartTime()) / 1000;
+
         // 模板变量替换，生成最终推送内容
         String params = notification.getParams().
                 replace("{reportTitle}", report.getName()).
@@ -114,6 +116,7 @@ public class NotificationService {
                 replace("{caseError}", report.getErrorCount().toString()).
                 replace("{successPercent}", report.getPassRate()).
                 replace("{executeTime}", during +"S");
+
         // 通过 Webhook 推送到外部平台
         HttpUtil.post(notification.getWebhookUrl(), params);
     }

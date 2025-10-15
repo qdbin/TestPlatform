@@ -101,9 +101,9 @@ public class RunService {
 
         // 新增task(填充task相关信息)
         String runName = runRequest.getSourceName() +"-"+ new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date()); // 任务名称含时间戳
-        task.setName(runName);
+        task.setName(runName);                              // run_name
         task.setStatus(ReportStatus.PREPARED.toString());   // Prepared（状态）
-        task.setType(runRequest.getTaskType());             // debug/run（类型）
+        task.setType(runRequest.getTaskType());             // 即时/计划（类型）
         task.setEngineId(runRequest.getEngineId());         // enginId
         task.setProjectId(runRequest.getProjectId());       // projectId
         task.setCreateUser(runRequest.getRunUser());
@@ -115,7 +115,7 @@ public class RunService {
         // 新增报告（与任务绑定）
         Report report = new Report();
         report.setId(UUID.randomUUID().toString());
-        report.setName(runName);
+        report.setName(runName);                                    // run_name
         report.setTaskId(task.getId());                             // taskId
         report.setEnvironmentId(runRequest.getEnvironmentId());     // environmentId
         report.setDeviceId(runRequest.getDeviceId());
@@ -148,7 +148,7 @@ public class RunService {
         reportStatistics.setTotal(total);
         reportMapper.addReportStatistics(reportStatistics); // 写入统计
 
-        // task绑定reportId
+        // taskDTO绑定reportId
         task.setReportId(report.getId());
 
         // 系统引擎(广播通知所有在线系统引擎拉取任务)
