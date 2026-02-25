@@ -42,10 +42,8 @@
 			<!-- 操作列 -->
 			<el-table-column fixed="right" align="operation" label="操作" width="100px">
 				<template slot-scope="scope">
-					<el-button type="text" v-if="scope.row.createUser===currentUser"
-										 size="mini" @click="viewEngine(scope.row.id)">查看</el-button>
-					<el-button type="text" v-if="scope.row.engineType ==='custom'& scope.row.createUser===currentUser"
-										 size="mini" @click="deleteEngine(scope.row)">删除</el-button>
+					<el-button type="text" v-if="scope.row.createUser===currentUser" size="mini" @click="viewEngine(scope.row.id)">查看</el-button>
+					<el-button type="text" v-if="scope.row.engineType ==='custom'& scope.row.createUser===currentUser" size="mini" @click="deleteEngine(scope.row)">删除</el-button>
 				</template>
 			</el-table-column>
 		</el-table>

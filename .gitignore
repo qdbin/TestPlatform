@@ -1,0 +1,17 @@
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### IDE ###
+.idea/
+.trae/
+.vscode/
+target/
+*.iws
+*.iml
+*.ipr
+data
+
+TestEngin/
+
+

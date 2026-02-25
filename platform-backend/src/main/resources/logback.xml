@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration debug="true">
+	<!-- Spring Boot 启动早期会自动加载此 logback.xml -->
+	<!-- 通过读取 application.properties，把其中的键作为变量供 ${...} 使用 -->
+	<property resource="application.properties"/>
+
+	<!-- 控制台输出：开发调试使用的标准输出 -->
+	<appender name="console" class="ch.qos.logback.core.ConsoleAppender">
+		<encoder>
+			<pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n</pattern>
+		</encoder>
+	</appender>
+
+	<!-- 输出器;DEBUG 文件输出：仅记录 DEBUG 级别，按日期+大小滚动归档 -->
+	<appender name="debugAppender" class="ch.qos.logback.core.rolling.RollingFileAppender">
+		<!-- 过滤器 -->
+		<filter class="ch.qos.logback.classic.filter.LevelFilter">
+			<level>DEBUG</level>
+			<onMatch>ACCEPT</onMatch>
+			<onMismatch>DENY</onMismatch>
+		</filter>
+		<!-- 文件输出 -->
+		<File>${logging.file.path}/debug.log</File>
+		<!-- RollingPolicy（滚动策略）：决定“如何切分历史日志”。你的配置是“按日期 + 按大小分片”，每天一个目录切片且每片最大 50MB。 -->
+		<rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+			<FileNamePattern>${logging.file.path}/history/debug.%d{yyyyMMdd}-%i.log</FileNamePattern>
+			<maxHistory>30</maxHistory>
+			<TimeBasedFileNamingAndTriggeringPolicy
+					class="ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP">
+				<maxFileSize>50MB</maxFileSize>
+			</TimeBasedFileNamingAndTriggeringPolicy>
+		</rollingPolicy>
+		<!-- 格式器 -->
+		<encoder>
+			<charset>UTF-8</charset>
+			<!-- %d 时间；%thread 线程名；%-5level 等级；%logger{36} 类名；%line 行号；%msg 信息；%n 换行 -->
+			<Pattern>%d [%thread] %-5level %logger{36} %line - %msg%n</Pattern>
+		</encoder>
+	</appender>
+
+	<!-- INFO 文件输出：记录 >=INFO 的日志，按日期+大小滚动归档 -->
+	<appender name="infoAppender"
+		class="ch.qos.logback.core.rolling.RollingFileAppender">
+		<filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+			<level>INFO</level>
+		</filter>
+		<File>${logging.file.path}/info.log</File>
+		<rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+			<FileNamePattern>${logging.file.path}/history/info.%d{yyyyMMdd}-%i.log
+			</FileNamePattern>
+			<maxHistory>30</maxHistory>
+			<TimeBasedFileNamingAndTriggeringPolicy
+					class="ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP">
+				<maxFileSize>50MB</maxFileSize>
+			</TimeBasedFileNamingAndTriggeringPolicy>
+		</rollingPolicy>
+		<encoder>
+			<charset>UTF-8</charset>
+			<Pattern>%d [%thread] %-5level %logger{36} %line - %msg%n</Pattern>
+		</encoder>
+	</appender>
+
+	<!-- ERROR 文件输出：仅记录 ERROR 级别，按日期+大小滚动归档 -->
+	<appender name="errorAppender"
+		class="ch.qos.logback.core.rolling.RollingFileAppender">
+		<filter class="ch.qos.logback.classic.filter.LevelFilter">
+			<level>ERROR</level>
+			<onMatch>ACCEPT</onMatch>
+			<onMismatch>DENY</onMismatch>
+		</filter>
+
+		<File>${logging.file.path}/error.log</File>
+		<rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+			<FileNamePattern>${logging.file.path}/history/error.%d{yyyyMMdd}-%i.log
+			</FileNamePattern>
+			<maxHistory>30</maxHistory>
+			<TimeBasedFileNamingAndTriggeringPolicy
+					class="ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP">
+				<maxFileSize>50MB</maxFileSize>
+			</TimeBasedFileNamingAndTriggeringPolicy>
+		</rollingPolicy>
+		<encoder>
+			<charset>UTF-8</charset>
+			<Pattern>%d [%thread] %-5level %logger{36} %line - %msg%n</Pattern>
+		</encoder>
+	</appender>
+
+	<!-- WARN 文件输出：仅记录 WARN 级别，按日期+大小滚动归档 -->
+	<appender name="warnAppender"
+		class="ch.qos.logback.core.rolling.RollingFileAppender">
+		<filter class="ch.qos.logback.classic.filter.LevelFilter">
+			<level>WARN</level>
+			<onMatch>ACCEPT</onMatch>
+			<onMismatch>DENY</onMismatch>
+		</filter>
+		<File>${logging.file.path}/warn.log</File>
+		<rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+			<FileNamePattern>${logging.file.path}/history/warn.%d{yyyyMMdd}-%i.log
+			</FileNamePattern>
+			<maxHistory>30</maxHistory>
+			<TimeBasedFileNamingAndTriggeringPolicy
+					class="ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP">
+				<maxFileSize>50MB</maxFileSize>
+			</TimeBasedFileNamingAndTriggeringPolicy>
+		</rollingPolicy>
+		<encoder>
+			<charset>UTF-8</charset>
+			<Pattern>%d [%thread] %-5level %logger{36} %line - %msg%n</Pattern>
+		</encoder>
+	</appender>
+
+	<!-- 异步包装：将控制台输出改为异步，降低主线程 I/O 阻塞 -->
+	<appender name="consoleAsyncAppender" class="ch.qos.logback.classic.AsyncAppender">
+		<filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+			<level>DEBUG</level>
+		</filter>
+		<queueSize>10000</queueSize>
+		<appender-ref ref="console" />
+	</appender>
+
+	<!-- 异步包装：debug 文件输出异步化，队列大小 10000 -->
+	<appender name="debugAsyncAppender" class="ch.qos.logback.classic.AsyncAppender">
+		<filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+			<level>DEBUG</level>
+		</filter>
+		<queueSize>10000</queueSize>
+		<appender-ref ref="debugAppender" />
+	</appender>
+
+	<!-- 异步包装：info 文件输出异步化，队列大小 10000 -->
+	<appender name="infoAsyncAppender" class="ch.qos.logback.classic.AsyncAppender">
+		<filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+			<level>INFO</level>
+		</filter>
+		<queueSize>10000</queueSize>
+		<appender-ref ref="infoAppender" />
+	</appender>
+
+	<!-- 异步包装：error 文件输出异步化；includeCallerData=true 会记录调用栈，性能成本较高 -->
+	<appender name="errorAsyncAppender" class="ch.qos.logback.classic.AsyncAppender">
+		<filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+			<level>ERROR</level>
+		</filter>
+		<queueSize>10000</queueSize>
+		<includeCallerData>true</includeCallerData>
+		<appender-ref ref="errorAppender" />
+	</appender>
+
+	<!-- 异步包装：warn 文件输出异步化；includeCallerData=true 会记录调用栈，性能成本较高 -->
+	<appender name="warnAsyncAppender" class="ch.qos.logback.classic.AsyncAppender">
+		<filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+			<level>WARN</level>
+		</filter>
+		<queueSize>10000</queueSize>
+		<includeCallerData>true</includeCallerData>
+		<appender-ref ref="warnAppender" />
+	</appender>
+
+	<!-- 根日志器：全局日志级别为 INFO，输出到 info 文件和控制台 -->
+	<root level="INFO">
+		<appender-ref ref="infoAsyncAppender" />
+		<appender-ref ref="console"/>
+	</root>
+
+	<!-- 业务包专用日志器：关闭父级叠加（additivity=false），输出到各级别文件 -->
+	<logger name="com.autotest.LiuMa" additivity="false">
+		<level value="${logger.level:INFO}"/>
+		<appender-ref ref="infoAsyncAppender"/>
+		<appender-ref ref="warnAsyncAppender"/>
+		<appender-ref ref="errorAsyncAppender"/>
+		<appender-ref ref="debugAsyncAppender"/>
+	</logger>
+
+	<!-- SQL Mapper 日志：仅把 SQL 打印到控制台，便于开发排查 -->
+	<logger name="com.autotest.LiuMa.database.mapper" level="DEBUG">
+		<appender-ref ref="console"/>
+	</logger>
+
+</configuration>

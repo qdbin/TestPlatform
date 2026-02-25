@@ -11,10 +11,9 @@ lerna-debug.log*
 .idea
 .trae
 .vscode
-assets
 node_modules
 package-lock.json
-src
+# src
 
 dist
 dist-ssr
@@ -23,6 +22,7 @@ dist-ssr
 # Editor directories and files
 !.vscode/extensions.json
 .DS_Store
+assets
 
 *.suo
 *.ntvs*

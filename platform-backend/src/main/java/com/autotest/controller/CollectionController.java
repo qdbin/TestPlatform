@@ -84,8 +84,7 @@ public class CollectionController {
      *     @return Pager<List<CollectionDTO>> // 分页结果
      */
     @PostMapping("/list/{goPage}/{pageSize}")
-    public Pager<List<CollectionDTO>> getCollectionList(@PathVariable int goPage, @PathVariable int pageSize,
-                                           @RequestBody QueryRequest request) {
+    public Pager<List<CollectionDTO>> getCollectionList(@PathVariable int goPage, @PathVariable int pageSize,@RequestBody QueryRequest request) {
         Page<Object> page = PageHelper.startPage(goPage, pageSize, true);
         return PageUtils.setPageInfo(page, collectionService.getCollectionList(request));
     }

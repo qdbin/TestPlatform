@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>路由测试页面</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            background: white;
+            border-radius: 15px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 600px;
+            width: 90%;
+        }
+
+        h1 {
+            color: #303133;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #909399;
+            margin-bottom: 30px;
+            font-size: 16px;
+        }
+
+        .route-view-demo {
+            background: #f8f9fa;
+            border: 2px dashed #dcdfe6;
+            border-radius: 10px;
+            padding: 30px;
+            margin: 20px 0;
+            min-height: 150px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #c0c4cc;
+            font-size: 16px;
+        }
+
+        .button-group {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 30px 0;
+        }
+
+        .nav-button {
+            background: linear-gradient(45deg, #409eff, #67c23a);
+            color: white;
+            border: none;
+            padding: 15px 25px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .nav-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
+
+        .nav-button.tmp {
+            background: linear-gradient(45deg, #e6a23c, #f56c6c);
+        }
+
+        .nav-button.route {
+            background: linear-gradient(45deg, #909399, #606266);
+        }
+
+        .features {
+            background: #f5f7fa;
+            border-radius: 10px;
+            padding: 25px;
+            margin-top: 30px;
+            text-align: left;
+        }
+
+        .features h3 {
+            color: #303133;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+
+        .feature-list {
+            list-style: none;
+        }
+
+        .feature-list li {
+            margin-bottom: 10px;
+            padding-left: 25px;
+            position: relative;
+            color: #606266;
+            line-height: 1.6;
+        }
+
+        .feature-list li::before {
+            content: "✨";
+            position: absolute;
+            left: 0;
+            top: 0;
+        }
+
+        .tech-stack {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .tech-badge {
+            background: linear-gradient(45deg, #409eff, #67c23a);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .footer {
+            margin-top: 30px;
+            color: #909399;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 路由测试演示</h1>
+        <p class="subtitle">Vue Router 功能测试与组件展示平台</p>
+
+        <!-- 路由视图演示区域 -->
+        <div class="route-view-demo">
+            <div id="route-content">
+                📍 这里是 &lt;router-view&gt; 标签的演示区域
+                <br>
+                <small>点击下面的按钮体验路由跳转功能</small>
+            </div>
+        </div>
+
+        <!-- 导航按钮组 -->
+        <div class="button-group">
+            <a href="#/tmp" class="nav-button tmp">
+                🧪 组件测试容器
+            </a>
+            <a href="#/tmp-route" class="nav-button route">
+                🎯 路由测试页面
+            </a>
+            <a href="#/login" class="nav-button">
+                🔐 登录页面
+            </a>
+            <a href="#/home/dashboard" class="nav-button">
+                🏠 主控制台
+            </a>
+        </div>
+
+        <!-- 功能特性 -->
+        <div class="features">
+            <h3>🎯 核心功能</h3>
+            <ul class="feature-list">
+                <li>支持 Vue Router 路由跳转测试</li>
+                <li>集成 Element UI 组件库</li>
+                <li>提供组件快速测试容器</li>
+                <li>支持项目所有组件的独立测试</li>
+                <li>完整的路由导航功能演示</li>
+                <li>响应式设计，适配各种屏幕</li>
+            </ul>
+        </div>
+
+        <!-- 技术栈展示 -->
+        <div class="tech-stack">
+            <span class="tech-badge">Vue.js</span>
+            <span class="tech-badge">Vue Router</span>
+            <span class="tech-badge">Element UI</span>
+            <span class="tech-badge">SCSS</span>
+        </div>
+
+        <!-- 页脚 -->
+        <div class="footer">
+            <p>🎨 专为学习和测试设计 | 自动化测试平台</p>
+        </div>
+    </div>
+
+    <script>
+        // 路由跳转功能增强
+        document.addEventListener('DOMContentLoaded', function() {
+            // 监听路由变化
+            window.addEventListener('hashchange', function() {
+                console.log('路由发生变化:', window.location.hash);
+                updateRouteDisplay();
+            });
+
+            // 初始化显示
+            updateRouteDisplay();
+        });
+
+        /**
+         * 更新路由显示
+         */
+        function updateRouteDisplay() {
+            const hash = window.location.hash;
+            const routeContent = document.getElementById('route-content');
+            
+            if (hash) {
+                routeContent.innerHTML = `
+                    🎯 当前路由: <strong>${hash}</strong>
+                    <br>
+                    <small>路由参数和查询字符串会被自动解析</small>
+                `;
+            } else {
+                routeContent.innerHTML = `
+                    📍 这里是 &lt;router-view&gt; 标签的演示区域
+                    <br>
+                    <small>点击下面的按钮体验路由跳转功能</small>
+                `;
+            }
+        }
+
+        /**
+         * 添加路由参数测试功能
+         */
+        function testRouteWithParams() {
+            // 示例：带参数的路由跳转
+            const testParams = {
+                id: Math.floor(Math.random() * 1000),
+                type: 'test',
+                timestamp: Date.now()
+            };
+            
+            const paramString = Object.keys(testParams)
+                .map(key => `${key}=${testParams[key]}`)
+                .join('&');
+            
+            window.location.hash = `#/tmp-route?${paramString}`;
+        }
+
+        // 暴露全局函数供调试使用
+        window.routeTest = {
+            updateDisplay: updateRouteDisplay,
+            testParams: testRouteWithParams,
+            getCurrentRoute: () => window.location.hash
+        };
+
+        console.log('🚀 路由测试页面已加载完成！');
+        console.log('💡 可用函数:');
+        console.log('  - routeTest.updateDisplay() - 更新路由显示');
+        console.log('  - routeTest.testParams() - 测试带参数的路由');
+        console.log('  - routeTest.getCurrentRoute() - 获取当前路由');
+    </script>
+</body>
+</html>

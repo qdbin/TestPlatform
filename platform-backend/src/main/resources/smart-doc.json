@@ -1,0 +1,9 @@
+{
+  "serverUrl": "http://localhost:8080",
+  "outPath": "docs/api",
+  "allInOne": true,
+  "packageFilters": "com.autotest.controller",
+  "projectName": "AutoTest API",
+  "openApi": true,
+  "coverOld": true
+}

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.autotest.mapper.ReportCollectionCaseWebMapper">
+  <insert id="batchAddReportCollectionCaseWeb" parameterType="java.util.List">
+    insert into report_collection_case_web (id, report_collection_case_id, case_web_index, operation_id, operation_name, operation_element, description, exec_log, screen_shot, status)
+    values
+    <foreach collection="list" item="item" separator=",">
+      (#{item.id}, #{item.reportCollectionCaseId}, #{item.caseWebIndex}, #{item.operationId}, #{item.operationName}, #{item.operationElement},  #{item.description}, #{item.execLog},
+      #{item.screenshot}, #{item.status})
+    </foreach>
+  </insert>
+  <select id="getReportCaseActionList" parameterType="java.lang.String" resultType="com.autotest.dto.ReportCollectionCaseTransDTO">
+    select status, operation_id as transId, operation_name as transName, operation_element as content, description, exec_log, screen_shot as screenshotList from report_collection_case_web
+    where report_collection_case_id = #{reportCaseId} order by case_web_index
+  </select>
+  <delete id="deleteByReportId" parameterType="java.lang.String">
+    delete rccw from report_collection_case_web rccw
+    left join report_collection_case rcc on rcc.id = rccw.report_collection_case_id
+    left join report_collection rc on rc.id = rcc.report_collection_id
+    where rc.report_id = #{reportId}
+  </delete>
+</mapper>

@@ -1,6 +1,6 @@
 /**
-* 头部菜单
-*/
+ * 顶部导航组件（面包屑 + 用户菜单 + 配置中心 + 项目切换）
+ */
 <template>
   <el-menu class="el-menu-demo" mode="horizontal" background-color="#fff" text-color="#000">
     <!-- 面包屑导航 -->
@@ -20,8 +20,8 @@
       <template v-slot:dropdown>
         <el-dropdown-menu style="font-size:14px">
           <el-dropdown-item command="personal">个人中心</el-dropdown-item>
-          <el-dropdown-item command="help">使用手册</el-dropdown-item>
-          <el-dropdown-item command="follow">关注我们</el-dropdown-item>
+          <!-- <el-dropdown-item command="help">使用手册</el-dropdown-item>
+          <el-dropdown-item command="follow">关注我们</el-dropdown-item> -->
           <el-dropdown-item command="logout">退出</el-dropdown-item>
         </el-dropdown-menu>
       </template>
@@ -67,6 +67,7 @@ export default {
       qrUrl: require('../../../assets/img/qr.png')
     }
   },
+  // 创建后：初始化用户信息并加载项目列表
   created() {
     this.user = JSON.parse(localStorage.getItem('userInfo'));
     this.getProjectInfo(this.user.id);
@@ -91,6 +92,7 @@ export default {
         this.$message.info('已取消');
       })
     },
+    // 拉取并设置用户可选项目及当前项目
     getProjectInfo(userId){
       let url = '/autotest/project/user/' + userId;
       this.$get(url, response =>{
@@ -106,6 +108,7 @@ export default {
     handleCommand(command) {
       switch (command) {
         case "personal":
+          // 跳转到个人中心页面
           this.$router.push({path: '/setting/userSetting'});
           break;
         case "help":
@@ -115,15 +118,19 @@ export default {
           this.showQR = true;
           break;
         case "logout":
+          // 执行退出登录操作
           this.exit();
           break;
         default:
           break;
       }
     },
+    
+    // 打开配置中心
     openSetting() {
       this.$router.push({path: '/setting/systemSetting'});
     },
+    // 改变项目
     changeProject(command){
       if(command.id != this.currentProject.id){
         let url = '/autotest/user/switch/project';
@@ -146,6 +153,7 @@ export default {
 }
 </script>
 <style scoped>
+/* 面包屑、用户/项目下拉与右对齐辅助样式 */
 .breadcrumb{
   float: left;
   padding: 13px 0px;

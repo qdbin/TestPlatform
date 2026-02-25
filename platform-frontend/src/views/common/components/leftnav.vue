@@ -67,8 +67,9 @@ export default {
   width: 200px;
   min-height: 400px;
 }
+/* 菜单图标 */
 .el-menu-vertical-demo{
-  width: 48px;
+  width: 48px;  
 }
 .el-menu-item-demo .el-submenu__title{
   height: 48px;

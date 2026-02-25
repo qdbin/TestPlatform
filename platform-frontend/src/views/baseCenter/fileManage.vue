@@ -17,7 +17,7 @@
             <el-button size="small" type="primary" icon="el-icon-plus" @click="addFile">上传文件</el-button> <!-- 打开上传弹窗 -->
         </el-form-item>
     </el-form>
-    
+
     <!-- 文件列表表格 -->
     <el-table size="small" :data="fileData" v-loading="loading"> <!-- 文件数据表格，支持加载状态 -->
         <el-table-column prop="id" label="UUID" width="250px"/> <!-- 文件唯一标识 -->
@@ -31,20 +31,22 @@
             </template>
         </el-table-column>
     </el-table>
-    
+
     <!-- 分页组件 -->
     <Pagination v-bind:child-msg="pageparam" @callFather="callFather"/> <!-- 分页控制组件 -->
-    
+
     <!-- 上传文件弹窗 -->
     <el-dialog title="上传文件" :visible.sync="uploadFileVisible" width="600px" destroy-on-close> <!-- 文件上传对话框 -->
         <el-form label-width="120px" style="padding-right: 30px;" :model="uploadFileForm" :rules="rules" ref="uploadFileForm"> <!-- 上传表单 -->
             <el-form-item label="文件名称" prop="name">
                 <el-input size="small" style="width: 90%" v-model="uploadFileForm.name" placeholder="请输入文件名称"/> <!-- 文件名称输入 -->
             </el-form-item>
+
             <el-form-item label="文件描述" prop="description">
                 <el-input size="small" style="width: 90%" v-model="uploadFileForm.description" :autosize="{ minRows: 3}"
                 maxlength="200" show-word-limit type="textarea" clearable placeholder="请输入文件描述"/> <!-- 文件描述输入 -->
             </el-form-item>
+
             <el-form-item label="选择文件" prop="fileList">
                 <!-- 文件上传组件 -->
                 <el-upload class="upload-demo" :file-list="uploadFileForm.fileList" :before-upload="beforeUpload" :http-request="uploadFile"
@@ -73,7 +75,7 @@ export default {
     components: {
         Pagination
     },
-    
+
     /**
      * 组件数据定义
      * @returns {Object} 组件的响应式数据对象
@@ -82,36 +84,36 @@ export default {
         return{
             loading: false, // 列表加载状态
             uploadFileVisible: false, // 上传弹窗显隐状态
-            
+
             // 搜索表单数据
             searchForm: {
                 page: 1, // 当前页码
                 limit: 10, // 每页显示数量
                 condition: "" // 搜索条件（文件名或UUID）
             },
-            
+
             fileData: [], // 文件列表数据
-            
+
             // 分页参数配置
             pageparam: {
                 currentPage: 1, // 当前页码
                 pageSize: 10, // 每页大小
                 total: 0 // 总记录数
             },
-            
+
             // 上传文件表单数据
-            uploadFileForm: {}, 
-            
+            uploadFileForm: {},
+
             // 表单验证规则
             rules: {
                 name: [{ required: true, message: '文件名称不能为空', trigger: 'blur' }], // 名称必填校验
                 fileList: [{ required: true, message: '文件不能为空', trigger: 'blur' }] // 文件必选校验
             },
-            
+
             currentUser: "" // 当前登录用户ID
         }
     },
-    
+
     /**
      * 组件创建时的生命周期钩子
      * 初始化面包屑导航、获取当前用户信息并加载文件列表
@@ -121,7 +123,7 @@ export default {
         this.currentUser = this.$store.state.userInfo.id; // 获取当前用户ID
         this.getdata(this.searchForm); // 加载文件列表数据
     },
-    
+
     methods: {
         /**
          * 获取文件列表数据并处理分页与时间格式
@@ -140,11 +142,11 @@ export default {
                 // 处理时间格式转换
                 for(let i = 0; i < data.list.length; i++){
                     // 时间戳转换为可读格式
-                    data.list[i].createTime = timestampToTime(data.list[i].createTime); 
+                    data.list[i].createTime = timestampToTime(data.list[i].createTime);
                 }
                 this.fileData = data.list; // 设置文件列表数据
                 this.loading = false; // 关闭加载状态
-                
+
                 // 更新分页参数
                 this.pageparam.currentPage = this.searchForm.page;
                 this.pageparam.pageSize = this.searchForm.limit;
@@ -191,7 +193,7 @@ export default {
             };
             this.uploadFileVisible = true; // 显示上传弹窗
         },
-        
+
         /**
          * 提交上传表单
          * @param {String} confirm - 表单引用名称
@@ -252,14 +254,14 @@ export default {
             }
             return true;
         },
-        
+
         /**
          * 文件数量超出限制处理
          */
         handleExceed() {
             this.$message.warning('一次最多只能上传一个文件');
         },
-        
+
         /**
          * 文件选择后的处理
          * @param {Object} option - 上传选项对象，包含文件信息
@@ -269,7 +271,7 @@ export default {
             this.uploadFileForm.name = option.file.name; // 自动填充文件名
             this.$refs.uploadFileForm.validateField('fileList'); // 触发文件字段验证
         },
-        
+
         /**
          * 移除已选择的文件
          */
