@@ -88,6 +88,8 @@ const projectManage= () => import('@/views/system/project');
 const RoleManage= () => import('@/views/system/role');
 // 用户管理
 const userManage= () => import('@/views/system/user');
+// AI助手
+const AIAssistant= () => import('@/views/aiAssistant/index');
 
 /**
  * 临时测试组件-可删
@@ -445,6 +447,14 @@ export default new Router({
             component: userManage,
             meta: {
                 requirePerm: "USER_MENU",
+                requireAuth: true
+            }
+        },{
+            path: '/aiAssistant',
+            name: 'AI助手',
+            component: AIAssistant,
+            meta: {
+                requirePerm: "NORMAL_MENU",
                 requireAuth: true
             }
         }]

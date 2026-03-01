@@ -7,11 +7,13 @@
 .trae/
 .vscode/
 target/
+
+
 *.iws
 *.iml
 *.ipr
 data
-assets/
+# assets/
 TestEngin/
-个人简历（260126）.md
+# 个人简历（260126）.md
 

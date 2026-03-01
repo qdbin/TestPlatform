@@ -1,0 +1,35 @@
+# AI服务配置
+# 注意：实际部署时请使用环境变量
+
+# LLM配置
+llm:
+  provider: "deepseek" # deepseek/openai/anthropic/qwen
+  model: "deepseek-chat"
+  api_key: "sk-204632e546384c0796afbf44d7c8e232"
+  base_url: "https://api.deepseek.com/v1"
+  temperature: 0.7
+  max_tokens: 2000
+
+# Embedding配置
+embedding:
+  model: "BAAI/bge-small-zh-v1.5"
+  device: "cpu" # cpu/cuda
+  batch_size: 32
+
+# Chroma配置
+vector_store:
+  persist_directory: "./chroma_data"
+  collection_name_prefix: "project_"
+
+# 平台API配置
+platform:
+  base_url: "http://localhost:8080"
+  timeout: 30
+
+# 服务配置
+server:
+  host: "0.0.0.0"
+  port: 8001
+  cors_origins:
+    - "http://localhost:5173"
+    - "http://localhost:8080"

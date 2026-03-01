@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.autotest.mapper.AiConversationMapper">
+
+    <insert id="addConversation" parameterType="com.autotest.domain.AiConversation">
+        INSERT INTO ai_conversation (id, project_id, user_id, session_type, title, messages, context, use_rag, status, create_time, update_time)
+        VALUES (#{id}, #{projectId}, #{userId}, #{sessionType}, #{title}, #{messages}, #{context}, #{useRag}, #{status}, #{createTime}, #{updateTime})
+    </insert>
+
+    <update id="updateConversation" parameterType="com.autotest.domain.AiConversation">
+        UPDATE ai_conversation
+        SET title = #{title}, messages = #{messages}, context = #{context}, use_rag = #{useRag}, status = #{status}, update_time = #{updateTime}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteConversation" parameterType="string">
+        UPDATE ai_conversation SET status = 'closed', update_time = UNIX_TIMESTAMP()*1000 WHERE id = #{id}
+    </delete>
+
+    <select id="getConversationById" resultType="com.autotest.domain.AiConversation">
+        SELECT id, project_id as projectId, user_id as userId, session_type as sessionType, title, messages, context, use_rag as useRag, status, create_time as createTime, update_time as updateTime
+        FROM ai_conversation WHERE id = #{id}
+    </select>
+
+    <select id="getConversationList" resultType="com.autotest.domain.AiConversation">
+        SELECT id, project_id as projectId, user_id as userId, session_type as sessionType, title, messages, context, use_rag as useRag, status, create_time as createTime, update_time as updateTime
+        FROM ai_conversation WHERE project_id = #{projectId} AND user_id = #{userId} AND status = 'active' ORDER BY update_time DESC
+    </select>
+
+    <select id="getConversationListByType" resultType="com.autotest.domain.AiConversation">
+        SELECT id, project_id as projectId, user_id as userId, session_type as sessionType, title, messages, context, use_rag as useRag, status, create_time as createTime, update_time as updateTime
+        FROM ai_conversation WHERE project_id = #{projectId} AND user_id = #{userId} AND session_type = #{sessionType} AND status = 'active' ORDER BY update_time DESC
+    </select>
+
+</mapper>

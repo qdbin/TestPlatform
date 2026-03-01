@@ -1,0 +1,20 @@
+.idea/
+
+# Python
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+env
+.idea
+log/
+Dockerfile
+.trae/
+.vscode/
+target/
+*.iws
+*.iml
+*.ipr
+data
+**/chromedriver.exe
