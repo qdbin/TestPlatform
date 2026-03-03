@@ -2,7 +2,7 @@
 Agent路由
 处理用例生成相关请求
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from app.services.agent_service import agent_service
@@ -18,13 +18,15 @@ class GenerateCaseRequest(BaseModel):
 
 
 @router.post("/generate-case")
-async def generate_case(request: GenerateCaseRequest):
+async def generate_case(request: GenerateCaseRequest, raw_request: Request):
     """
     生成测试用例
     """
     try:
+        token = raw_request.headers.get("token") or ""
         result = agent_service.generate_case(
             project_id=request.project_id,
+            token=token,
             user_requirement=request.user_requirement,
             selected_apis=request.selected_apis
         )
@@ -35,12 +37,13 @@ async def generate_case(request: GenerateCaseRequest):
 
 
 @router.get("/api-list/{project_id}")
-async def get_api_list(project_id: str):
+async def get_api_list(project_id: str, raw_request: Request):
     """
     获取接口列表供用户选择
     """
     try:
-        apis = agent_service.get_api_list_for_selection(project_id)
+        token = raw_request.headers.get("token") or ""
+        apis = agent_service.get_api_list_for_selection(project_id, token)
         return {
             "status": "success",
             "data": apis

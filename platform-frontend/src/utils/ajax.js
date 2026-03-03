@@ -139,6 +139,25 @@ export function post(url, data, success) {
   }
 }
 
+// DELETE请求：自动附带token
+export function del(url, success) {
+  let result = {loading: true};
+  let config = getTokenConfig(this.$store.state.token);
+  if (!success) {
+    return axios.delete(url, config);
+  } else {
+    axios.delete(url, config).then(response => {
+      let res = then(success, response, result);
+      if(res == false){
+        logout(this.$store, this.$router);
+      }
+    }).catch(error => {
+      exception(error, result, url);
+    });
+    return result;
+  }
+}
+
 // 通用请求：axios.request透传配置
 export function request(axiosRequestConfig, success) {
   let result = {loading: true};
@@ -205,6 +224,8 @@ export default {
     Vue.prototype.$get = get; // GET
 
     Vue.prototype.$post = post; // POST
+
+    Vue.prototype.$delete = del; // DELETE
 
     Vue.prototype.$request = request; // 通用请求
 

@@ -27,7 +27,9 @@ public enum MenuEnum {
     SYSTEM(600,"系统管理", "icon-xitongguanli", null, null, null),
     USER(611,"用户管理", "icon-yonghuguanli", "/systemManage/user", SYSTEM, PermissionEnum.USER_MENU),
     ROLE(621,"角色管理", "icon-jiaoseguanli", "/systemManage/role", SYSTEM, PermissionEnum.ROLE_MENU),
-    PROJECT(631,"项目管理", "icon-xiangmuguanli", "/systemManage/project", SYSTEM, PermissionEnum.PROJECT_MENU);
+    PROJECT(631,"项目管理", "icon-xiangmuguanli", "/systemManage/project", SYSTEM, PermissionEnum.PROJECT_MENU),
+    AI(700,"AI助手", "icon-bangzhu", null, null, null),
+    AI_CHAT(711,"AI助手", "icon-bangzhu", "/aiAssistant", AI, PermissionEnum.NORMAL_MENU);
 
     public final Integer id;              // 菜单唯一ID
     public final String name;             // 菜单名称
