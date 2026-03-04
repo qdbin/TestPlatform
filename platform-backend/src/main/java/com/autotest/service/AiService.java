@@ -1,9 +1,13 @@
 package com.autotest.service;
 
 import com.autotest.domain.AiKnowledge;
+import com.autotest.common.exception.LMException;
 import com.autotest.mapper.AiKnowledgeMapper;
-import com.autotest.mapper.ApiMapper;
 import com.autotest.request.AiKnowledgeRequest;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
@@ -11,8 +15,12 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import javax.annotation.Resource;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 /**
@@ -29,8 +37,11 @@ public class AiService {
     @Resource
     private RestTemplate restTemplate;
 
-    // AI服务地址配置
-    private static final String AI_SERVICE_URL = "http://localhost:8001";
+    @Resource
+    private ObjectMapper objectMapper;
+
+    @Value("${ai.service.base-url:http://localhost:8001}")
+    private String aiServiceBaseUrl;
 
     private <T> T postToAiService(String path, Object body, String token, Class<T> responseType) {
         HttpHeaders headers = new HttpHeaders();
@@ -39,7 +50,7 @@ public class AiService {
         }
         HttpEntity<Object> entity = new HttpEntity<>(body, headers);
         ResponseEntity<T> response = restTemplate.exchange(
-                AI_SERVICE_URL + path,
+                aiServiceBaseUrl + path,
                 HttpMethod.POST,
                 entity,
                 responseType);
@@ -53,11 +64,15 @@ public class AiService {
         }
         HttpEntity<Void> entity = new HttpEntity<>(headers);
         ResponseEntity<T> response = restTemplate.exchange(
-                AI_SERVICE_URL + path,
+                aiServiceBaseUrl + path,
                 HttpMethod.GET,
                 entity,
                 responseType);
         return response.getBody();
+    }
+
+    private void deleteFromAiService(String path) {
+        restTemplate.exchange(aiServiceBaseUrl + path, HttpMethod.DELETE, null, Map.class);
     }
 
     // ==================== 知识库管理 ====================
@@ -70,6 +85,8 @@ public class AiService {
         boolean isCreate = request.getId() == null || request.getId().isEmpty();
         knowledge.setId(isCreate ? UUID.randomUUID().toString().replace("-", "") : request.getId());
         knowledge.setProjectId(request.getProjectId());
+        knowledge.setParentId(
+                request.getParentId() == null || request.getParentId().isEmpty() ? "0" : request.getParentId());
         knowledge.setName(request.getName());
         knowledge.setContent(request.getContent());
         knowledge.setDocType(request.getDocType() != null ? request.getDocType() : "manual");
@@ -83,6 +100,11 @@ public class AiService {
             knowledge.setStatus("active");
             aiKnowledgeMapper.addKnowledge(knowledge);
         } else {
+            AiKnowledge existed = aiKnowledgeMapper.getKnowledgeById(knowledge.getId());
+            if (existed == null) {
+                throw new LMException("知识库文档不存在");
+            }
+            knowledge.setStatus(existed.getStatus() == null ? "active" : existed.getStatus());
             aiKnowledgeMapper.updateKnowledge(knowledge);
         }
         return knowledge.getId();
@@ -91,8 +113,23 @@ public class AiService {
     /**
      * 二、删除知识库文档
      */
-    public void deleteKnowledge(String knowledgeId) {
+    public void deleteKnowledge(String knowledgeId, String projectId) {
+        AiKnowledge knowledge = aiKnowledgeMapper.getKnowledgeById(knowledgeId);
+        if (knowledge != null && "folder".equals(knowledge.getDocType())) {
+            Integer childCount = aiKnowledgeMapper.countChildren(knowledge.getProjectId(), knowledge.getId());
+            if (childCount != null && childCount > 0) {
+                throw new LMException("该目录下还有子节点，无法删除");
+            }
+        }
         aiKnowledgeMapper.deleteKnowledge(knowledgeId);
+        try {
+            String targetProjectId = projectId;
+            if (knowledge != null && knowledge.getProjectId() != null && !knowledge.getProjectId().isEmpty()) {
+                targetProjectId = knowledge.getProjectId();
+            }
+            deleteFromAiService("/ai/knowledge/index/" + knowledgeId + "?project_id=" + targetProjectId);
+        } catch (Exception ignored) {
+        }
     }
 
     /**
@@ -115,10 +152,13 @@ public class AiService {
     public void indexKnowledge(String knowledgeId) {
         AiKnowledge knowledge = aiKnowledgeMapper.getKnowledgeById(knowledgeId);
         if (knowledge == null) {
-            throw new RuntimeException("知识库文档不存在");
+            throw new LMException("知识库文档不存在");
         }
-        // 调用FastAPI服务进行索引
         try {
+            try {
+                deleteFromAiService("/ai/knowledge/index/" + knowledge.getId() + "?project_id=" + knowledge.getProjectId());
+            } catch (Exception ignored) {
+            }
             Map<String, Object> params = new HashMap<>();
             params.put("knowledge_id", knowledge.getId());
             params.put("project_id", knowledge.getProjectId());
@@ -128,6 +168,7 @@ public class AiService {
 
             AiKnowledge update = new AiKnowledge();
             update.setId(knowledge.getId());
+            update.setParentId(knowledge.getParentId());
             update.setName(knowledge.getName());
             update.setContent(knowledge.getContent());
             update.setDocType(knowledge.getDocType());
@@ -139,6 +180,7 @@ public class AiService {
         } catch (Exception e) {
             AiKnowledge update = new AiKnowledge();
             update.setId(knowledge.getId());
+            update.setParentId(knowledge.getParentId());
             update.setName(knowledge.getName());
             update.setContent(knowledge.getContent());
             update.setDocType(knowledge.getDocType());
@@ -147,7 +189,7 @@ public class AiService {
             update.setUpdateTime(System.currentTimeMillis());
             update.setUpdateUser(knowledge.getUpdateUser());
             aiKnowledgeMapper.updateKnowledge(update);
-            throw new RuntimeException("知识库索引失败: " + e.getMessage());
+            throw new LMException("知识库索引失败: " + e.getMessage());
         }
     }
 
@@ -160,7 +202,57 @@ public class AiService {
         try {
             return postToAiService("/ai/chat", request, token, Map.class);
         } catch (Exception e) {
-            throw new RuntimeException("AI服务调用失败: " + e.getMessage());
+            throw new LMException("AI服务调用失败: " + e.getMessage());
+        }
+    }
+
+    public void streamChat(Map<String, Object> request, String token, SseEmitter emitter) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        if (token != null && !token.isEmpty()) {
+            headers.add("token", token);
+        }
+        HttpEntity<Object> entity = new HttpEntity<>(request, headers);
+
+        try {
+            restTemplate.execute(
+                    aiServiceBaseUrl + "/ai/chat/stream",
+                    HttpMethod.POST,
+                    restTemplate.httpEntityCallback(entity),
+                    response -> {
+                        try (BufferedReader reader = new BufferedReader(
+                                new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                if (!line.startsWith("data:")) {
+                                    continue;
+                                }
+                                String payload = line.replaceFirst("^data:\\s*", "").trim();
+                                if (payload.isEmpty()) {
+                                    continue;
+                                }
+                                Map<String, Object> event = objectMapper.readValue(
+                                        payload,
+                                        new TypeReference<Map<String, Object>>() {
+                                        });
+                                emitter.send(SseEmitter.event().data(event));
+                                if ("end".equals(String.valueOf(event.get("type")))) {
+                                    break;
+                                }
+                            }
+                        }
+                        return null;
+                    });
+            emitter.complete();
+        } catch (Exception e) {
+            try {
+                Map<String, Object> errorPayload = new HashMap<>();
+                errorPayload.put("type", "error");
+                errorPayload.put("message", "AI服务调用失败: " + e.getMessage());
+                emitter.send(SseEmitter.event().data(errorPayload));
+            } catch (Exception ignored) {
+            }
+            emitter.complete();
         }
     }
 
@@ -171,7 +263,7 @@ public class AiService {
         try {
             return postToAiService("/ai/agent/generate-case", request, token, Map.class);
         } catch (Exception e) {
-            throw new RuntimeException("用例生成失败: " + e.getMessage());
+            throw new LMException("用例生成失败: " + e.getMessage());
         }
     }
 
@@ -179,7 +271,7 @@ public class AiService {
         try {
             return getFromAiService("/ai/agent/api-list/" + projectId, token, Map.class);
         } catch (Exception e) {
-            throw new RuntimeException("获取接口列表失败: " + e.getMessage());
+            throw new LMException("获取接口列表失败: " + e.getMessage());
         }
     }
 }

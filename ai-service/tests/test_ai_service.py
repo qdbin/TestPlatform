@@ -2,7 +2,6 @@ import os
 import sys
 from typing import List
 
-import chromadb
 import pytest
 from fastapi.testclient import TestClient
 
@@ -16,6 +15,76 @@ class DummyEmbeddings:
 
     def embed_query(self, text: str):
         return [0.0, 0.0, 0.0]
+
+
+class FakeCollection:
+    def __init__(self):
+        self.docs = []
+        self.ids = []
+        self.metadatas = []
+        self.embeddings = []
+
+    def add(self, embeddings, documents, ids, metadatas):
+        self.embeddings.extend(embeddings)
+        self.docs.extend(documents)
+        self.ids.extend(ids)
+        self.metadatas.extend(metadatas)
+
+    def upsert(self, embeddings, documents, ids, metadatas):
+        current = {id_val: i for i, id_val in enumerate(self.ids)}
+        for i, id_val in enumerate(ids):
+            if id_val in current:
+                idx = current[id_val]
+                self.embeddings[idx] = embeddings[i]
+                self.docs[idx] = documents[i]
+                self.metadatas[idx] = metadatas[i]
+            else:
+                self.embeddings.append(embeddings[i])
+                self.docs.append(documents[i])
+                self.ids.append(id_val)
+                self.metadatas.append(metadatas[i])
+
+    def query(self, query_embeddings, n_results=5):
+        top_docs = self.docs[:n_results]
+        top_meta = self.metadatas[:n_results]
+        top_distance = [0.0 for _ in top_docs]
+        return {
+            "documents": [top_docs],
+            "metadatas": [top_meta],
+            "distances": [top_distance],
+        }
+
+    def count(self):
+        return len(self.ids)
+
+    def get(self):
+        return {"ids": self.ids, "metadatas": self.metadatas}
+
+    def delete(self, ids):
+        remain = [
+            (d, i, m, e)
+            for d, i, m, e in zip(self.docs, self.ids, self.metadatas, self.embeddings)
+            if i not in set(ids)
+        ]
+        self.docs = [x[0] for x in remain]
+        self.ids = [x[1] for x in remain]
+        self.metadatas = [x[2] for x in remain]
+        self.embeddings = [x[3] for x in remain]
+
+
+class FakeClient:
+    def __init__(self):
+        self.collections = {}
+
+    def get_or_create_collection(self, name, metadata=None):
+        if name not in self.collections:
+            self.collections[name] = FakeCollection()
+        return self.collections[name]
+
+    def get_collection(self, name):
+        if name not in self.collections:
+            raise ValueError("collection not exists")
+        return self.collections[name]
 
 
 @pytest.fixture()
@@ -45,7 +114,7 @@ def test_rag_search_empty(monkeypatch):
     from app.services.rag_service import rag_service
 
     rag_service._embeddings = DummyEmbeddings()
-    rag_service._client = chromadb.EphemeralClient()
+    rag_service._client = FakeClient()
 
     results = rag_service.search("project_x", "登录接口", top_k=3)
     assert results == []
@@ -55,7 +124,7 @@ def test_rag_add_and_search(monkeypatch):
     from app.services.rag_service import rag_service
 
     rag_service._embeddings = DummyEmbeddings()
-    rag_service._client = chromadb.EphemeralClient()
+    rag_service._client = FakeClient()
 
     project_id = "test_project"
     knowledge_id = "k1"
@@ -65,6 +134,33 @@ def test_rag_add_and_search(monkeypatch):
     results = rag_service.search(project_id, "登录", top_k=2)
     assert isinstance(results, list)
     assert len(results) > 0
+
+
+def test_rag_reindex_same_knowledge(monkeypatch):
+    from app.services.rag_service import rag_service
+
+    rag_service._embeddings = DummyEmbeddings()
+    rag_service._client = FakeClient()
+
+    project_id = "test_project_reindex"
+    knowledge_id = "k_reindex"
+    rag_service.add_documents(project_id, knowledge_id, ["登录接口V1"])
+    rag_service.add_documents(project_id, knowledge_id, ["登录接口V2"])
+    stats = rag_service.get_collection_stats(project_id)
+    assert stats["count"] == 1
+
+
+def test_rag_fallback_search_when_embedding_unavailable(monkeypatch):
+    from app.services.rag_service import rag_service
+
+    monkeypatch.setattr(rag_service, "_init_components", lambda: None)
+    rag_service._embeddings = None
+    rag_service._client = FakeClient()
+    rag_service._fallback_docs = {}
+    rag_service._upsert_fallback_docs("p_fallback", "k1", ["韩斌简历：自动化测试工程师"])
+    results = rag_service.search("p_fallback", "韩斌", top_k=3)
+    assert isinstance(results, list)
+    assert len(results) >= 1
 
 
 def test_platform_client_headers():
@@ -97,10 +193,12 @@ def test_chat_api_uses_agent(monkeypatch, client: TestClient):
 def test_chat_stream_sse_format(monkeypatch, client: TestClient):
     from app.services import agent_service as agent_service_module
 
-    def fake_chat(project_id: str, token: str, message: str, use_rag: bool):
-        return {"reply": "OK", "case": {"name": "demo"}}
+    def fake_stream_chat(project_id: str, token: str, message: str, use_rag: bool):
+        yield {"type": "content", "delta": "O"}
+        yield {"type": "content", "delta": "K"}
+        yield {"type": "case", "case": {"name": "demo"}}
 
-    monkeypatch.setattr(agent_service_module.agent_service, "chat", fake_chat)
+    monkeypatch.setattr(agent_service_module.agent_service, "stream_chat", fake_stream_chat)
 
     resp = client.post(
         "/ai/chat/stream",
@@ -112,4 +210,61 @@ def test_chat_stream_sse_format(monkeypatch, client: TestClient):
     assert "data:" in text
     assert '"type": "case"' in text
     assert '"type": "end"' in text
+
+
+def test_agent_chat_case_via_executor(monkeypatch):
+    from app.services.agent_service import agent_service
+
+    class FakeExecutor:
+        def invoke(self, payload):
+            return {
+                "output": '{"reply":"已生成草稿","case":{"name":"登录接口用例"}}'
+            }
+
+    monkeypatch.setattr(agent_service, "_build_executor", lambda p, t, r: FakeExecutor())
+
+    result = agent_service.chat(
+        project_id="p1",
+        token="tok",
+        message="请帮我生成登录接口测试用例",
+        use_rag=True,
+    )
+    assert result.get("reply") == "已生成草稿"
+    assert isinstance(result.get("case"), dict)
+
+
+def test_generate_case_json_repair(monkeypatch):
+    from app.services import agent_service as agent_service_module
+    from app.services.agent_service import agent_service
+    from app.services import llm_service as llm_service_module
+    from app.services import rag_service as rag_service_module
+
+    class FakePlatformClient:
+        def get_api_detail(self, api_id: str):
+            return {
+                "id": api_id,
+                "name": "登录接口",
+                "path": "/login",
+                "method": "POST",
+                "moduleId": "m1",
+                "moduleName": "登录模块",
+            }
+
+    monkeypatch.setattr(agent_service_module, "get_platform_client", lambda token: FakePlatformClient())
+    monkeypatch.setattr(rag_service_module.rag_service, "search", lambda project_id, query, top_k=5: [])
+    monkeypatch.setattr(
+        llm_service_module.llm_service,
+        "chat",
+        lambda messages: '{"name":"登录用例","type":"API","caseApis":[{"name":"步骤1",}],}',
+    )
+
+    result = agent_service.generate_case(
+        project_id="p1",
+        token="tok",
+        user_requirement="生成登录接口测试用例",
+        selected_apis=["api_1"],
+    )
+    assert result.get("status") == "success"
+    assert isinstance(result.get("case"), dict)
+    assert result["case"].get("name") == "登录用例"
 

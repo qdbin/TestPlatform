@@ -12,7 +12,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
-import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -87,6 +86,24 @@ public class AiController {
         return userId.equals(project.getProjectAdmin());
     }
 
+    private boolean canManageKnowledgeItem(HttpServletRequest request, AiKnowledge knowledge) {
+        if (knowledge == null) {
+            return false;
+        }
+        String userId = getLoginUserId(request);
+        if (userId.isEmpty()) {
+            return false;
+        }
+        if (isSuperAdmin(userId)) {
+            return true;
+        }
+        Project project = projectService.getProjectInfo(knowledge.getProjectId());
+        if (project != null && userId.equals(project.getProjectAdmin())) {
+            return true;
+        }
+        return userId.equals(knowledge.getCreateUser());
+    }
+
     // ==================== 知识库管理 ====================
 
     /**
@@ -95,23 +112,34 @@ public class AiController {
     @GetMapping("/knowledge")
     public Map<String, Object> getKnowledgeList(@RequestParam String projectId, HttpServletRequest httpServletRequest) {
         assertProjectAccess(httpServletRequest, projectId);
-        boolean canManage = canManageKnowledge(httpServletRequest, projectId);
+        String userId = getLoginUserId(httpServletRequest);
+        Project project = projectService.getProjectInfo(projectId);
+        boolean canManageAll = canManageKnowledge(httpServletRequest, projectId);
         List<Map<String, Object>> safeList = new ArrayList<>();
-        if (canManage) {
-            List<AiKnowledge> list = aiService.getKnowledgeList(projectId);
-            for (AiKnowledge k : list) {
-                Map<String, Object> item = new HashMap<>();
-                item.put("id", k.getId());
-                item.put("projectId", k.getProjectId());
-                item.put("name", k.getName());
-                item.put("docType", k.getDocType());
-                item.put("sourceType", k.getSourceType());
-                item.put("status", k.getStatus());
-                item.put("indexedStatus", "indexed".equals(k.getStatus()) ? "ready" : "pending");
-                item.put("createTime", k.getCreateTime());
-                item.put("updateTime", k.getUpdateTime());
-                safeList.add(item);
+        List<AiKnowledge> list = aiService.getKnowledgeList(projectId);
+        for (AiKnowledge k : list) {
+            Map<String, Object> item = new HashMap<>();
+            item.put("id", k.getId());
+            item.put("projectId", k.getProjectId());
+            item.put("parentId", k.getParentId());
+            item.put("name", k.getName());
+            item.put("docType", k.getDocType());
+            item.put("sourceType", k.getSourceType());
+            item.put("status", k.getStatus());
+            if ("indexed".equals(k.getStatus())) {
+                item.put("indexedStatus", "ready");
+            } else if ("error".equals(k.getStatus())) {
+                item.put("indexedStatus", "error");
+            } else {
+                item.put("indexedStatus", "pending");
             }
+            item.put("createTime", k.getCreateTime());
+            item.put("updateTime", k.getUpdateTime());
+            item.put("createUser", k.getCreateUser());
+            boolean canEdit = canManageAll || userId.equals(k.getCreateUser());
+            item.put("canEdit", canEdit);
+            item.put("isProjectAdmin", project != null && userId.equals(project.getProjectAdmin()));
+            safeList.add(item);
         }
         Map<String, Object> result = new HashMap<>();
         result.put("data", safeList);
@@ -122,8 +150,35 @@ public class AiController {
      * 二、获取知识库详情
      */
     @GetMapping("/knowledge/{id}")
-    public Map<String, Object> getKnowledgeDetail(@PathVariable String id) {
-        throw new LMException("知识库文档不支持查看内容");
+    public Map<String, Object> getKnowledgeDetail(@PathVariable String id, @RequestParam String projectId,
+            HttpServletRequest httpServletRequest) {
+        assertProjectAccess(httpServletRequest, projectId);
+        AiKnowledge knowledge = aiService.getKnowledgeDetail(id);
+        if (knowledge == null) {
+            throw new LMException("知识库文档不存在");
+        }
+        if (!projectId.equals(knowledge.getProjectId())) {
+            throw new LMException("知识库文档不存在");
+        }
+        String userId = getLoginUserId(httpServletRequest);
+        boolean canManageAll = canManageKnowledge(httpServletRequest, projectId);
+        Map<String, Object> detail = new HashMap<>();
+        detail.put("id", knowledge.getId());
+        detail.put("projectId", knowledge.getProjectId());
+        detail.put("parentId", knowledge.getParentId());
+        detail.put("name", knowledge.getName());
+        detail.put("content", knowledge.getContent());
+        detail.put("docType", knowledge.getDocType());
+        detail.put("sourceType", knowledge.getSourceType());
+        detail.put("status", knowledge.getStatus());
+        detail.put("createTime", knowledge.getCreateTime());
+        detail.put("updateTime", knowledge.getUpdateTime());
+        detail.put("createUser", knowledge.getCreateUser());
+        detail.put("updateUser", knowledge.getUpdateUser());
+        detail.put("canEdit", canManageAll || userId.equals(knowledge.getCreateUser()));
+        Map<String, Object> result = new HashMap<>();
+        result.put("data", detail);
+        return result;
     }
 
     /**
@@ -133,8 +188,15 @@ public class AiController {
     public Map<String, Object> saveKnowledge(@RequestBody AiKnowledgeRequest request,
             HttpServletRequest httpServletRequest) {
         assertProjectAccess(httpServletRequest, request.getProjectId());
-        if (!canManageKnowledge(httpServletRequest, request.getProjectId())) {
-            throw new LMException("无权限操作知识库");
+        String loginUserId = getLoginUserId(httpServletRequest);
+        request.setUpdateUser(loginUserId);
+        if (request.getId() != null && !request.getId().isEmpty()) {
+            AiKnowledge existed = aiService.getKnowledgeDetail(request.getId());
+            if (!canManageKnowledgeItem(httpServletRequest, existed)) {
+                throw new LMException("无权限操作知识库");
+            }
+        } else if (loginUserId.isEmpty()) {
+            throw new LMException("未登录");
         }
         String id = aiService.saveKnowledge(request);
         Map<String, Object> result = new HashMap<>();
@@ -149,10 +211,11 @@ public class AiController {
     public Map<String, Object> deleteKnowledge(@PathVariable String id, @RequestParam String projectId,
             HttpServletRequest httpServletRequest) {
         assertProjectAccess(httpServletRequest, projectId);
-        if (!canManageKnowledge(httpServletRequest, projectId)) {
+        AiKnowledge existed = aiService.getKnowledgeDetail(id);
+        if (!canManageKnowledgeItem(httpServletRequest, existed)) {
             throw new LMException("无权限操作知识库");
         }
-        aiService.deleteKnowledge(id);
+        aiService.deleteKnowledge(id, projectId);
         Map<String, Object> result = new HashMap<>();
         result.put("msg", "删除成功");
         return result;
@@ -165,7 +228,8 @@ public class AiController {
     public Map<String, Object> indexKnowledge(@PathVariable String id, @RequestParam String projectId,
             HttpServletRequest httpServletRequest) {
         assertProjectAccess(httpServletRequest, projectId);
-        if (!canManageKnowledge(httpServletRequest, projectId)) {
+        AiKnowledge existed = aiService.getKnowledgeDetail(id);
+        if (!canManageKnowledgeItem(httpServletRequest, existed)) {
             throw new LMException("无权限操作知识库");
         }
         aiService.indexKnowledge(id);
@@ -181,57 +245,25 @@ public class AiController {
      */
     @PostMapping("/chat/stream")
     public SseEmitter chatStream(@RequestBody Map<String, Object> request,
-            @RequestHeader(value = "token", required = false) String token) {
+            @RequestHeader(value = "token", required = false) String token,
+            HttpServletRequest httpServletRequest) {
+        String projectId = (String) request.get("projectId");
+        assertProjectAccess(httpServletRequest, projectId);
         SseEmitter emitter = new SseEmitter(300000L); // 5分钟超时
 
         CompletableFuture.runAsync(() -> {
             try {
-                String projectId = (String) request.get("projectId");
                 String message = (String) request.get("message");
                 Boolean useRag = (Boolean) request.getOrDefault("useRag", true);
                 String conversationId = (String) request.get("conversationId");
 
-                // 构建转发请求
                 Map<String, Object> aiRequest = new HashMap<>();
                 aiRequest.put("project_id", projectId);
                 aiRequest.put("message", message);
                 aiRequest.put("use_rag", useRag);
                 aiRequest.put("conversation_id", conversationId != null ? conversationId : "");
-
-                // 调用AI服务（简化处理，实际应该使用SSE）
-                Map<String, Object> aiResponse = aiService.chat(aiRequest, token);
-
-                // 发送响应
-                String content = (String) aiResponse.get("content");
-                if (content != null) {
-                    Map<String, Object> payload = new HashMap<>();
-                    payload.put("type", "content");
-                    payload.put("delta", content);
-                    emitter.send(SseEmitter.event().data(payload));
-                }
-
-                Object caseDraft = aiResponse.get("case");
-                if (caseDraft != null) {
-                    Map<String, Object> payload = new HashMap<>();
-                    payload.put("type", "case");
-                    payload.put("case", caseDraft);
-                    emitter.send(SseEmitter.event().data(payload));
-                }
-
-                // 保存AI响应
-                Map<String, Object> endPayload = new HashMap<>();
-                endPayload.put("type", "end");
-                emitter.send(SseEmitter.event().data(endPayload));
-                emitter.complete();
-
+                aiService.streamChat(aiRequest, token, emitter);
             } catch (Exception e) {
-                try {
-                    Map<String, Object> errorPayload = new HashMap<>();
-                    errorPayload.put("type", "error");
-                    errorPayload.put("message", e.getMessage());
-                    emitter.send(SseEmitter.event().data(errorPayload));
-                } catch (IOException ignore) {
-                }
                 emitter.complete();
             }
         });
@@ -246,9 +278,12 @@ public class AiController {
      */
     @PostMapping("/generate/case")
     public Map<String, Object> generateCase(@RequestBody Map<String, Object> request,
-            @RequestHeader(value = "token", required = false) String token) {
+            @RequestHeader(value = "token", required = false) String token,
+            HttpServletRequest httpServletRequest) {
+        String projectId = request.get("projectId") == null ? null : String.valueOf(request.get("projectId"));
+        assertProjectAccess(httpServletRequest, projectId);
         Map<String, Object> payload = new HashMap<>();
-        payload.put("project_id", request.get("projectId"));
+        payload.put("project_id", projectId);
         payload.put("user_requirement", request.get("userRequirement"));
         payload.put("selected_apis", request.get("selectedApis"));
         return aiService.generateCase(payload, token);
@@ -256,7 +291,9 @@ public class AiController {
 
     @GetMapping("/agent/api-list/{projectId}")
     public Map<String, Object> getAgentApiList(@PathVariable String projectId,
-            @RequestHeader(value = "token", required = false) String token) {
+            @RequestHeader(value = "token", required = false) String token,
+            HttpServletRequest httpServletRequest) {
+        assertProjectAccess(httpServletRequest, projectId);
         return aiService.getAgentApiList(projectId, token);
     }
 

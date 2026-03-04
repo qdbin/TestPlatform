@@ -44,29 +44,10 @@
           </div>
         </el-tab-pane>
         <el-tab-pane label="知识库" name="knowledge">
-          <div class="knowledge-list">
-            <el-button
-              size="small"
-              icon="el-icon-plus"
-              @click="showKnowledgeDialog = true"
-              >添加文档</el-button
-            >
-            <div class="knowledge-items">
-              <div
-                v-for="kb in knowledgeList"
-                :key="kb.id"
-                class="knowledge-item"
-              >
-                <i class="el-icon-document"></i>
-                <span>{{ kb.name }}</span>
-                <el-tag
-                  size="mini"
-                  :type="kb.indexedStatus === 'ready' ? 'success' : 'warning'"
-                >
-                  {{ kb.indexedStatus === "ready" ? "已索引" : "待索引" }}
-                </el-tag>
-              </div>
-            </div>
+          <div class="knowledge-entry">
+            <el-button type="primary" size="small" @click="openKnowledgeManage">
+              打开知识库管理
+            </el-button>
           </div>
         </el-tab-pane>
       </el-tabs>
@@ -128,23 +109,23 @@
               ></i>
             </div>
             <div class="content">
-              <div class="bubble" v-html="renderContent(msg.content)"></div>
+              <div
+                class="bubble"
+                v-html="
+                  renderContent(
+                    msg.content ||
+                      (msg.role === 'assistant' &&
+                      currentConversationLoading &&
+                      index === messages.length - 1
+                        ? '思考中...'
+                        : '')
+                  )
+                "
+              ></div>
               <div class="time">{{ formatTime(msg.time) }}</div>
             </div>
           </div>
 
-          <div v-if="isLoading" class="message assistant loading">
-            <div class="avatar">
-              <i class="el-icon-cpu"></i>
-            </div>
-            <div class="content">
-              <div class="bubble">
-                <span class="loading-dots">
-                  <span></span><span></span><span></span>
-                </span>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -156,19 +137,111 @@
           :rows="2"
           placeholder="请输入问题，按 Enter 发送，Shift+Enter 换行"
           @keydown.enter.native="handleEnter"
-          :disabled="isLoading || historyReadOnly"
         >
         </el-input>
         <el-button
           type="primary"
-          :loading="isLoading"
-          :disabled="!inputMessage.trim() || historyReadOnly"
-          @click="sendMessage"
+          :disabled="!inputMessage.trim() && !currentConversationLoading"
+          @click="handleSendAction"
         >
-          发送
+          {{ currentConversationLoading ? "停止" : "发送" }}
         </el-button>
       </div>
     </div>
+
+    <!-- 知识库管理对话框 -->
+    <el-dialog
+      title="知识库管理"
+      :visible.sync="showKnowledgeManageDialog"
+      width="980px"
+      append-to-body
+      destroy-on-close
+    >
+      <div class="knowledge-manage">
+        <div class="knowledge-toolbar">
+          <el-button size="small" icon="el-icon-folder-add" @click="openCreateFolderDialog">
+            新建目录
+          </el-button>
+          <el-button size="small" icon="el-icon-plus" type="primary" @click="openCreateKnowledgeDialog">
+            添加文档
+          </el-button>
+        </div>
+        <el-tree
+          v-if="knowledgeTreeData.length > 0"
+          :data="knowledgeTreeData"
+          node-key="id"
+          default-expand-all
+          :expand-on-click-node="false"
+          @node-click="handleKnowledgeNodeClick"
+        >
+          <span slot-scope="{ data }" class="knowledge-node">
+            <span class="knowledge-node-main">
+              <i :class="data.docType === 'folder' ? 'el-icon-folder' : 'el-icon-document'"></i>
+              <span class="knowledge-node-title">{{ data.name || "未命名文档" }}</span>
+              <el-tag
+                v-if="data.docType !== 'folder'"
+                size="mini"
+                :type="knowledgeStatusType(data.indexedStatus)"
+              >
+                {{ knowledgeStatusText(data.indexedStatus) }}
+              </el-tag>
+            </span>
+            <span class="knowledge-node-actions">
+              <el-button
+                v-if="data.docType === 'folder' && data.canEdit"
+                type="text"
+                size="mini"
+                @click.stop="openCreateFolderDialog(data)"
+              >
+                新建子目录
+              </el-button>
+              <el-button
+                v-if="data.docType === 'folder' && data.canEdit"
+                type="text"
+                size="mini"
+                @click.stop="openCreateKnowledgeDialog(data)"
+              >
+                新建文档
+              </el-button>
+              <el-button
+                v-if="data.docType !== 'folder'"
+                type="text"
+                size="mini"
+                @click.stop="openViewKnowledge(data)"
+              >
+                查看
+              </el-button>
+              <el-button
+                v-if="data.docType !== 'folder' && data.canEdit"
+                type="text"
+                size="mini"
+                @click.stop="openEditKnowledge(data)"
+              >
+                编辑
+              </el-button>
+              <el-button
+                v-if="data.docType !== 'folder' && data.canEdit"
+                type="text"
+                size="mini"
+                @click.stop="reindexKnowledge(data)"
+              >
+                重建索引
+              </el-button>
+              <el-button
+                v-if="data.canEdit"
+                type="text"
+                size="mini"
+                style="color: #f56c6c"
+                @click.stop="deleteKnowledge(data)"
+              >
+                删除
+              </el-button>
+            </span>
+          </span>
+        </el-tree>
+        <div v-else class="empty-tip">暂无知识文档</div>
+      </div>
+    </el-dialog>
 
     <!-- 用例生成对话框 -->
     <el-dialog
@@ -219,37 +292,47 @@
 
     <!-- 知识库添加对话框 -->
     <el-dialog
-      title="添加知识库文档"
+      :title="knowledgeDialogTitle"
       :visible.sync="showKnowledgeDialog"
       width="600px"
+      @close="closeKnowledgeDialog"
     >
       <el-form :model="knowledgeForm" label-width="80px">
         <el-form-item label="文档名称">
           <el-input
             v-model="knowledgeForm.name"
+            :disabled="isKnowledgeReadonly"
             placeholder="请输入文档名称"
           ></el-input>
         </el-form-item>
         <el-form-item label="文档类型">
-          <el-select v-model="knowledgeForm.docType" placeholder="请选择">
+          <el-select
+            v-model="knowledgeForm.docType"
+            :disabled="isKnowledgeReadonly"
+            placeholder="请选择"
+          >
             <el-option label="使用手册" value="manual"></el-option>
             <el-option label="引导文档" value="guide"></el-option>
             <el-option label="接口文档" value="api_doc"></el-option>
             <el-option label="自定义" value="custom"></el-option>
+            <el-option label="目录" value="folder"></el-option>
           </el-select>
         </el-form-item>
-        <el-form-item label="文档内容">
+        <el-form-item label="文档内容" v-if="knowledgeForm.docType !== 'folder'">
           <el-input
             v-model="knowledgeForm.content"
             type="textarea"
             :rows="10"
+            :disabled="isKnowledgeReadonly"
             placeholder="请输入文档内容"
           ></el-input>
         </el-form-item>
       </el-form>
       <div slot="footer">
         <el-button @click="showKnowledgeDialog = false">取消</el-button>
-        <el-button type="primary" @click="saveKnowledge">保存并索引</el-button>
+        <el-button v-if="!isKnowledgeReadonly" type="primary" @click="saveKnowledge">
+          {{ knowledgeForm.docType === "folder" ? "保存目录" : "保存并索引" }}
+        </el-button>
       </div>
     </el-dialog>
 
@@ -272,6 +355,9 @@
 </template>
 
 <script>
+import MarkdownIt from "markdown-it";
+import mermaid from "mermaid";
+
 export default {
   name: "AIAssistant",
   data() {
@@ -287,8 +373,9 @@ export default {
       // 聊天
       inputMessage: "",
       messages: [],
-      isLoading: false,
       useRag: true,
+      loadingMap: {},
+      activeControllers: {},
 
       // 用例生成
       showCaseGenerate: false,
@@ -300,31 +387,145 @@ export default {
 
       // 知识库
       showKnowledgeDialog: false,
+      showKnowledgeManageDialog: false,
+      selectedKnowledgeFolderId: "0",
+      knowledgeTreeData: [],
+      knowledgeDialogMode: "create",
       knowledgeForm: {
+        id: "",
+        parentId: "0",
         name: "",
         docType: "manual",
         content: "",
       },
+      markdownIt: null,
+      mermaidRenderTimer: null,
     };
   },
+  computed: {
+    currentConversationLoading() {
+      if (!this.currentConversationId) return false;
+      return (
+        !!this.loadingMap[this.currentConversationId] &&
+        !!this.activeControllers[this.currentConversationId]
+      );
+    },
+    isKnowledgeReadonly() {
+      return this.knowledgeDialogMode === "view";
+    },
+    knowledgeDialogTitle() {
+      if (this.knowledgeDialogMode === "view") return "知识文档详情";
+      if (this.knowledgeDialogMode === "edit") return "编辑知识文档";
+      return "添加知识库文档";
+    },
+  },
   mounted() {
+    this.initMarkdown();
+    this.initMermaid();
     this.loadConversations();
     this.loadKnowledgeList();
+    this.scheduleMermaidRender();
+  },
+  beforeDestroy() {
+    Object.keys(this.activeControllers).forEach((id) => {
+      const controller = this.activeControllers[id];
+      if (controller && typeof controller.abort === "function") {
+        controller.abort();
+      }
+    });
+    if (this.mermaidRenderTimer) {
+      clearTimeout(this.mermaidRenderTimer);
+      this.mermaidRenderTimer = null;
+    }
   },
   methods: {
+    openKnowledgeManage() {
+      this.showKnowledgeManageDialog = true;
+      this.loadKnowledgeList();
+    },
+    getCurrentProjectId() {
+      if (this.$store.state.projectId) return String(this.$store.state.projectId);
+      if (this.$store.state.userInfo && this.$store.state.userInfo.lastProject) {
+        const lastProject = this.$store.state.userInfo.lastProject;
+        if (typeof lastProject === "string" || typeof lastProject === "number") {
+          return String(lastProject);
+        }
+        if (typeof lastProject === "object" && lastProject.id) {
+          return String(lastProject.id);
+        }
+      }
+      const rawUser = localStorage.getItem("userInfo");
+      if (rawUser) {
+        try {
+          const user = JSON.parse(rawUser);
+          if (user && user.lastProject) {
+            if (typeof user.lastProject === "string" || typeof user.lastProject === "number") {
+              return String(user.lastProject);
+            }
+            if (typeof user.lastProject === "object" && user.lastProject.id) {
+              return String(user.lastProject.id);
+            }
+          }
+        } catch (e) {}
+      }
+      const projectId = localStorage.getItem("projectId");
+      return projectId ? String(projectId) : "";
+    },
+
+    getCurrentUserId() {
+      if (this.$store.state.userInfo && this.$store.state.userInfo.id) {
+        return String(this.$store.state.userInfo.id);
+      }
+      const rawUser = localStorage.getItem("userInfo");
+      if (rawUser) {
+        try {
+          const user = JSON.parse(rawUser);
+          if (user && user.id) {
+            return String(user.id);
+          }
+        } catch (e) {}
+      }
+      const userId = localStorage.getItem("userId");
+      return userId ? String(userId) : "";
+    },
+
+    buildApiUrl(path) {
+      const base = (this.$axios && this.$axios.defaults && this.$axios.defaults.baseURL) || "";
+      if (!base || base === "/") {
+        return path;
+      }
+      const normalizedBase = base.endsWith("/") ? base.slice(0, -1) : base;
+      const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+      return `${normalizedBase}${normalizedPath}`;
+    },
+
     getResponseData(res) {
       if (!res || !res.data) return null;
-      if (Object.prototype.hasOwnProperty.call(res.data, "data"))
-        return res.data.data;
-      return res.data;
+      let current = res.data;
+      if (Object.prototype.hasOwnProperty.call(current, "data")) {
+        current = current.data;
+      }
+      while (
+        current &&
+        typeof current === "object" &&
+        !Array.isArray(current) &&
+        Object.keys(current).length === 1 &&
+        Object.prototype.hasOwnProperty.call(current, "data")
+      ) {
+        current = current.data;
+      }
+      return current;
     },
 
     getHistoryStorageKey() {
-      const projectId =
-        this.$store.state.project?.id || localStorage.getItem("projectId") || "";
-      const userId =
-        this.$store.state.user?.id || localStorage.getItem("userId") || "";
-      return `ai_chat_history_v1:${projectId}:${userId}`;
+      const projectId = this.getCurrentProjectId();
+      const userId = this.getCurrentUserId();
+      if (projectId && userId) {
+        return `ai_chat_history_v1:${projectId}:${userId}`;
+      }
+      const token = localStorage.getItem("token") || "anonymous";
+      const tokenTail = token.slice(-12);
+      return `ai_chat_history_v1:${projectId || "no_project"}:${userId || tokenTail}`;
     },
 
     estimateSizeBytes(text) {
@@ -335,18 +536,44 @@ export default {
       }
     },
 
+    shrinkHistory(conversationList) {
+      const list = Array.isArray(conversationList) ? [...conversationList] : [];
+      let json = JSON.stringify(list);
+      let size = this.estimateSizeBytes(json);
+      while (size >= 4.5 * 1024 * 1024 && list.length > 1) {
+        list.pop();
+        json = JSON.stringify(list);
+        size = this.estimateSizeBytes(json);
+      }
+      if (size >= 4.5 * 1024 * 1024 && list.length === 1) {
+        const one = list[0];
+        const msgs = Array.isArray(one.messages) ? [...one.messages] : [];
+        while (msgs.length > 2 && size >= 4.5 * 1024 * 1024) {
+          msgs.shift();
+          one.messages = msgs;
+          json = JSON.stringify(list);
+          size = this.estimateSizeBytes(json);
+        }
+      }
+      return list;
+    },
+
     tryPersistHistory(conversationList) {
       const key = this.getHistoryStorageKey();
-      const json = JSON.stringify(conversationList || []);
+      let targetList = conversationList || [];
+      let json = JSON.stringify(targetList);
       const size = this.estimateSizeBytes(json);
       if (size >= 5 * 1024 * 1024) {
-        this.historyReadOnly = true;
-        this.showStorageLimitDialog = true;
-        return false;
+        targetList = this.shrinkHistory(targetList);
+        json = JSON.stringify(targetList);
       }
 
       try {
         localStorage.setItem(key, json);
+        this.historyReadOnly = false;
+        if (targetList.length !== (conversationList || []).length) {
+          this.$message.warning("历史记录过大，已自动清理最早会话");
+        }
         return true;
       } catch (e) {
         this.historyReadOnly = true;
@@ -357,14 +584,29 @@ export default {
 
     loadConversations() {
       const key = this.getHistoryStorageKey();
+      this.loadingMap = {};
+      this.activeControllers = {};
       const raw = localStorage.getItem(key);
       if (!raw) {
         this.conversationList = [];
+        this.currentConversationId = null;
+        this.messages = [];
         this.historyReadOnly = false;
         return;
       }
       const size = this.estimateSizeBytes(raw);
       if (size >= 5 * 1024 * 1024) {
+        try {
+          const list = JSON.parse(raw);
+          const shrinked = this.shrinkHistory(Array.isArray(list) ? list : []);
+          if (this.tryPersistHistory(shrinked)) {
+            this.conversationList = shrinked;
+            this.historyReadOnly = false;
+            this.currentConversationId = null;
+            this.messages = [];
+            return;
+          }
+        } catch (e) {}
         this.historyReadOnly = true;
         this.showStorageLimitDialog = true;
       } else {
@@ -374,14 +616,17 @@ export default {
       try {
         const list = JSON.parse(raw);
         this.conversationList = Array.isArray(list) ? list : [];
+        this.currentConversationId = null;
+        this.messages = [];
       } catch (e) {
         this.conversationList = [];
+        this.currentConversationId = null;
+        this.messages = [];
       }
     },
 
     // 创建新会话（仅本地存储）
     createNewChat() {
-      if (this.historyReadOnly) return;
       const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
       const conv = {
         id,
@@ -391,7 +636,7 @@ export default {
         updateTime: Date.now(),
       };
       const next = [conv, ...this.conversationList];
-      if (!this.tryPersistHistory(next)) return;
+      this.tryPersistHistory(next);
       this.conversationList = next;
       this.currentConversationId = id;
       this.messages = [];
@@ -402,14 +647,15 @@ export default {
       this.currentConversationId = conv.id;
       this.messages = Array.isArray(conv.messages) ? conv.messages : [];
       this.scrollToBottom();
+      this.scheduleMermaidRender();
     },
 
     // 处理会话操作（仅本地存储）
     handleConvCommand(command, conv) {
-      if (this.historyReadOnly) return;
       if (command === "delete") {
+        this.abortConversationRequest(conv.id);
         const next = this.conversationList.filter((c) => c.id !== conv.id);
-        if (!this.tryPersistHistory(next)) return;
+        this.tryPersistHistory(next);
         this.conversationList = next;
         if (this.currentConversationId === conv.id) {
           this.currentConversationId = null;
@@ -418,11 +664,35 @@ export default {
       }
     },
 
-    updateCurrentConversationMessages(messages) {
-      const id = this.currentConversationId;
-      if (!id) return;
+    isConversationLoading(conversationId) {
+      return !!this.loadingMap[conversationId] && !!this.activeControllers[conversationId];
+    },
+
+    markConversationLoading(conversationId, loading) {
+      if (loading) {
+        this.$set(this.loadingMap, conversationId, true);
+      } else {
+        this.$delete(this.loadingMap, conversationId);
+      }
+    },
+
+    abortConversationRequest(conversationId) {
+      const controller = this.activeControllers[conversationId];
+      if (controller && typeof controller.abort === "function") {
+        controller.abort();
+      }
+      this.$delete(this.activeControllers, conversationId);
+      this.markConversationLoading(conversationId, false);
+    },
+
+    getConversationIndex(conversationId) {
+      return this.conversationList.findIndex((c) => c.id === conversationId);
+    },
+
+    updateConversationById(conversationId, messages) {
+      if (!conversationId) return;
       const next = this.conversationList.map((c) => {
-        if (c.id !== id) return c;
+        if (c.id !== conversationId) return c;
         const title = c.title && c.title !== "新会话" ? c.title : (messages[0]?.content || "新会话").slice(0, 20);
         return {
           ...c,
@@ -431,44 +701,64 @@ export default {
           updateTime: Date.now(),
         };
       });
-      if (!this.tryPersistHistory(next)) return;
+      this.tryPersistHistory(next);
       this.conversationList = next;
+      if (this.currentConversationId === conversationId) {
+        this.messages = messages;
+      }
     },
 
-    // 发送消息
     async sendMessage() {
-      if (!this.inputMessage.trim() || this.isLoading) return;
-      if (this.historyReadOnly) return;
+      if (!this.inputMessage.trim()) return;
 
-      const projectId =
-        this.$store.state.project?.id || localStorage.getItem("projectId");
-      const userId =
-        this.$store.state.user?.id || localStorage.getItem("userId");
+      const projectId = this.getCurrentProjectId();
+      const userId = this.getCurrentUserId();
+
+      if (!projectId) {
+        this.$message.error("当前项目ID为空，请重新选择项目后重试");
+        return;
+      }
+      if (!userId) {
+        this.$message.error("当前用户ID为空，请重新登录后重试");
+        return;
+      }
 
       if (!this.currentConversationId) {
         this.createNewChat();
       }
-
-      // 添加用户消息
-      const userMsg = {
-        role: "user",
-        content: this.inputMessage,
-        time: Date.now(),
-      };
-      this.messages.push(userMsg);
-      this.updateCurrentConversationMessages(this.messages);
-
+      const sendingConversationId = this.currentConversationId;
+      if (!sendingConversationId || this.isConversationLoading(sendingConversationId)) return;
+      const conversationIndex = this.getConversationIndex(sendingConversationId);
+      if (conversationIndex < 0) return;
+      const baseMessages = Array.isArray(this.conversationList[conversationIndex].messages)
+        ? [...this.conversationList[conversationIndex].messages]
+        : [];
       const inputMsg = this.inputMessage;
       this.inputMessage = "";
-      this.isLoading = true;
+
+      const userMsg = {
+        role: "user",
+        content: inputMsg,
+        time: Date.now(),
+      };
+      const assistantMsg = {
+        role: "assistant",
+        content: "",
+        time: Date.now(),
+      };
+      const sendingMessages = [...baseMessages, userMsg, assistantMsg];
+      this.updateConversationById(sendingConversationId, sendingMessages);
+      this.markConversationLoading(sendingConversationId, true);
+      const controller = new AbortController();
+      this.$set(this.activeControllers, sendingConversationId, controller);
       this.scrollToBottom();
 
       try {
-        // 使用SSE流式接收
         const response = await fetch(
-          `${this.$axios.defaults.baseURL}/autotest/ai/chat/stream`,
+          this.buildApiUrl("/autotest/ai/chat/stream"),
           {
             method: "POST",
+            signal: controller.signal,
             headers: {
               "Content-Type": "application/json",
               token: localStorage.getItem("token"),
@@ -478,7 +768,7 @@ export default {
               userId: userId,
               message: inputMsg,
               useRag: this.useRag,
-              conversationId: this.currentConversationId,
+              conversationId: sendingConversationId,
             }),
           }
         );
@@ -489,58 +779,111 @@ export default {
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
-
-        let assistantMsg = {
-          role: "assistant",
-          content: "",
-          time: Date.now(),
-        };
-
-        this.messages.push(assistantMsg);
-        this.scrollToBottom();
+        let sseBuffer = "";
+        let reachEnd = false;
+        let hasDelta = false;
+        let lastEventAt = Date.now();
+        const readWithTimeout = () =>
+          Promise.race([
+            reader.read(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("流式响应超时，请重试")), 12000)
+            ),
+          ]);
 
         while (true) {
-          const { done, value } = await reader.read();
+          let done = false;
+          let value = null;
+          try {
+            const readResult = await readWithTimeout();
+            done = readResult.done;
+            value = readResult.value;
+          } catch (e) {
+            if (hasDelta) {
+              break;
+            }
+            throw e;
+          }
           if (done) break;
-
-          const text = decoder.decode(value);
-          const lines = text.split("\n");
-
-          for (const line of lines) {
-            if (line.startsWith("data:")) {
+          const text = decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+          sseBuffer += text;
+          let eventEnd = sseBuffer.indexOf("\n\n");
+          while (eventEnd !== -1) {
+            const rawEvent = sseBuffer.slice(0, eventEnd);
+            sseBuffer = sseBuffer.slice(eventEnd + 2);
+            const payload = rawEvent
+              .split("\n")
+              .filter((line) => line.startsWith("data:"))
+              .map((line) => line.replace(/^data:\s*/, ""))
+              .join("\n")
+              .trim();
+            if (payload) {
+              let data = null;
               try {
-                const payload = line.replace(/^data:\s*/, "");
-                const data = JSON.parse(payload);
-                if (data.type === "content" && data.delta) {
-                  assistantMsg.content += data.delta;
-                  this.scrollToBottom();
-                } else if (data.type === "case" && data.case) {
-                  this.generatedCase = JSON.stringify(data.case, null, 2);
-                  this.caseGenerateStep = 2;
-                  this.showCaseGenerate = true;
-                } else if (data.type === "end") {
-                  break;
-                } else if (data.type === "error") {
-                  throw new Error(data.message || "AI服务错误");
-                }
+                data = JSON.parse(payload);
               } catch (e) {
-                // 忽略解析错误
+                data = null;
+              }
+              if (!data) {
+                eventEnd = sseBuffer.indexOf("\n\n");
+                continue;
+              }
+              if (data.type === "content" && data.delta) {
+                hasDelta = true;
+                lastEventAt = Date.now();
+                sendingMessages[sendingMessages.length - 1].content += data.delta;
+                if (this.currentConversationId === sendingConversationId) {
+                  this.messages = sendingMessages;
+                  this.scrollToBottom();
+                  this.scheduleMermaidRender();
+                }
+              } else if (data.type === "case" && data.case) {
+                lastEventAt = Date.now();
+                this.generatedCase = JSON.stringify(data.case, null, 2);
+                this.caseGenerateStep = 2;
+                this.showCaseGenerate = true;
+              } else if (data.type === "error") {
+                throw new Error(data.message || "AI服务错误");
+              } else if (data.type === "end") {
+                lastEventAt = Date.now();
+                reachEnd = true;
               }
             }
+            eventEnd = sseBuffer.indexOf("\n\n");
+          }
+          if (hasDelta && Date.now() - lastEventAt > 8000) {
+            break;
+          }
+          if (reachEnd) {
+            break;
           }
         }
-        this.updateCurrentConversationMessages(this.messages);
+        this.updateConversationById(sendingConversationId, sendingMessages);
       } catch (error) {
-        this.messages.push({
-          role: "assistant",
-          content: `AI服务调用失败：${error.message}`,
-          time: Date.now(),
-        });
-        this.updateCurrentConversationMessages(this.messages);
-        this.$message.error("AI服务调用失败：" + error.message);
+        if (error && error.name === "AbortError") {
+          const last = sendingMessages[sendingMessages.length - 1];
+          if (last && last.role === "assistant" && !last.content) {
+            sendingMessages.pop();
+            this.updateConversationById(sendingConversationId, sendingMessages);
+          }
+        } else {
+          const errorText = `AI服务调用失败：${error.message || "未知错误"}`;
+          sendingMessages.push({
+            role: "assistant",
+            content: errorText,
+            time: Date.now(),
+          });
+          this.updateConversationById(sendingConversationId, sendingMessages);
+          this.scheduleMermaidRender();
+          this.$message.error("AI服务调用失败：" + (error.message || "未知错误"));
+        }
       } finally {
-        this.isLoading = false;
-        this.scrollToBottom();
+        this.markConversationLoading(sendingConversationId, false);
+        this.$delete(this.activeControllers, sendingConversationId);
+        if (this.currentConversationId === sendingConversationId) {
+          this.scrollToBottom();
+        }
+        this.scheduleMermaidRender();
       }
     },
 
@@ -586,8 +929,16 @@ export default {
     handleEnter(e) {
       if (!e.shiftKey) {
         e.preventDefault();
-        this.sendMessage();
+        this.handleSendAction();
       }
+    },
+
+    handleSendAction() {
+      if (this.currentConversationLoading && this.currentConversationId) {
+        this.abortConversationRequest(this.currentConversationId);
+        return;
+      }
+      this.sendMessage();
     },
 
     // 滚动到底部
@@ -603,7 +954,82 @@ export default {
     // 渲染内容（简单支持换行）
     renderContent(content) {
       if (!content) return "";
-      return content.replace(/\n/g, "<br>");
+      if (!this.markdownIt) {
+        return this.escapeHtml(content).replace(/\n/g, "<br>");
+      }
+      return this.markdownIt.render(content);
+    },
+
+    initMarkdown() {
+      const md = new MarkdownIt({
+        html: false,
+        breaks: true,
+        linkify: true,
+        typographer: false,
+      });
+      const defaultFence = md.renderer.rules.fence;
+      md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+        const token = tokens[idx];
+        const info = (token.info || "").trim().toLowerCase();
+        if (info === "mermaid") {
+          return `<div class="mermaid">${this.escapeHtml(token.content)}</div>`;
+        }
+        if (defaultFence) {
+          return defaultFence(tokens, idx, options, env, self);
+        }
+        return self.renderToken(tokens, idx, options);
+      };
+      this.markdownIt = md;
+    },
+
+    initMermaid() {
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+      });
+    },
+
+    scheduleMermaidRender() {
+      if (this.mermaidRenderTimer) {
+        clearTimeout(this.mermaidRenderTimer);
+      }
+      this.mermaidRenderTimer = setTimeout(() => {
+        this.renderMermaid();
+      }, 120);
+    },
+
+    async renderMermaid() {
+      await this.$nextTick();
+      if (!this.$el) return;
+      const nodes = this.$el.querySelectorAll(".bubble .mermaid");
+      let index = 0;
+      for (const node of nodes) {
+        if (node.getAttribute("data-rendered") === "1") {
+          continue;
+        }
+        const chartCode = (node.textContent || "").trim();
+        if (!chartCode) {
+          continue;
+        }
+        try {
+          const chartId = `mmd_${Date.now()}_${index}_${Math.random().toString(16).slice(2)}`;
+          const result = await mermaid.render(chartId, chartCode);
+          node.innerHTML = result.svg;
+        } catch (e) {
+          node.innerHTML = `<pre>${this.escapeHtml(chartCode)}</pre>`;
+        }
+        node.setAttribute("data-rendered", "1");
+        index += 1;
+      }
+    },
+
+    escapeHtml(content) {
+      return String(content)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
     },
 
     // 格式化时间
@@ -617,36 +1043,168 @@ export default {
 
     // 加载知识库列表
     async loadKnowledgeList() {
-      const projectId =
-        this.$store.state.project?.id || localStorage.getItem("projectId");
+      const projectId = this.getCurrentProjectId();
+      if (!projectId) {
+        this.knowledgeList = [];
+        this.knowledgeTreeData = [];
+        return;
+      }
       const res = await this.$get(
         `/autotest/ai/knowledge?projectId=${projectId}`
       );
       const data = this.getResponseData(res);
-      if (data) {
+      if (Array.isArray(data)) {
         this.knowledgeList = data;
+        this.knowledgeTreeData = this.buildKnowledgeTree(data);
+        return;
+      }
+      if (data && Array.isArray(data.data)) {
+        this.knowledgeList = data.data;
+        this.knowledgeTreeData = this.buildKnowledgeTree(data.data);
+        return;
+      }
+      this.knowledgeList = [];
+      this.knowledgeTreeData = [];
+    },
+
+    buildKnowledgeTree(list) {
+      const rows = Array.isArray(list) ? list : [];
+      const map = {};
+      const roots = [];
+      rows.forEach((item) => {
+        map[item.id] = { ...item, children: [] };
+      });
+      rows.forEach((item) => {
+        const parentId = item.parentId || "0";
+        if (parentId !== "0" && map[parentId]) {
+          map[parentId].children.push(map[item.id]);
+        } else {
+          roots.push(map[item.id]);
+        }
+      });
+      return roots;
+    },
+
+    handleKnowledgeNodeClick(node) {
+      if (!node) return;
+      if (node.docType === "folder") {
+        this.selectedKnowledgeFolderId = node.id;
+      } else {
+        this.selectedKnowledgeFolderId = node.parentId || "0";
       }
     },
 
-    // 保存知识库
+    openCreateFolderDialog(parentNode) {
+      const parentId =
+        parentNode && parentNode.id
+          ? parentNode.id
+          : this.selectedKnowledgeFolderId || "0";
+      this.knowledgeDialogMode = "create";
+      this.knowledgeForm = {
+        id: "",
+        parentId: parentId,
+        name: "",
+        docType: "folder",
+        content: "",
+      };
+      this.showKnowledgeDialog = true;
+    },
+
+    openCreateKnowledgeDialog(parentNode) {
+      const parentId =
+        parentNode && parentNode.id
+          ? parentNode.id
+          : this.selectedKnowledgeFolderId || "0";
+      this.knowledgeDialogMode = "create";
+      this.knowledgeForm = {
+        id: "",
+        parentId: parentId,
+        name: "",
+        docType: "manual",
+        content: "",
+      };
+      this.showKnowledgeDialog = true;
+    },
+
+    async openViewKnowledge(kb) {
+      const projectId = this.getCurrentProjectId();
+      if (!projectId || !kb || !kb.id) return;
+      const res = await this.$get(`/autotest/ai/knowledge/${kb.id}?projectId=${projectId}`);
+      const detail = this.getResponseData(res);
+      if (!detail || typeof detail !== "object") {
+        this.$message.error("获取文档详情失败");
+        return;
+      }
+      this.knowledgeDialogMode = "view";
+      this.knowledgeForm = {
+        id: detail.id || "",
+        parentId: detail.parentId || "0",
+        name: detail.name || "",
+        docType: detail.docType || "manual",
+        content: detail.content || "",
+      };
+      this.showKnowledgeDialog = true;
+    },
+
+    async openEditKnowledge(kb) {
+      const projectId = this.getCurrentProjectId();
+      if (!projectId || !kb || !kb.id) return;
+      const res = await this.$get(`/autotest/ai/knowledge/${kb.id}?projectId=${projectId}`);
+      const detail = this.getResponseData(res);
+      if (!detail || typeof detail !== "object") {
+        this.$message.error("获取文档详情失败");
+        return;
+      }
+      this.knowledgeDialogMode = "edit";
+      this.knowledgeForm = {
+        id: detail.id || "",
+        parentId: detail.parentId || "0",
+        name: detail.name || "",
+        docType: detail.docType || "manual",
+        content: detail.content || "",
+      };
+      this.showKnowledgeDialog = true;
+    },
+
+    closeKnowledgeDialog() {
+      this.knowledgeDialogMode = "create";
+      this.knowledgeForm = { id: "", parentId: "0", name: "", docType: "manual", content: "" };
+    },
+
     async saveKnowledge() {
-      const projectId =
-        this.$store.state.project?.id || localStorage.getItem("projectId");
-      const userId =
-        this.$store.state.user?.id || localStorage.getItem("userId");
+      const projectId = this.getCurrentProjectId();
+      const userId = this.getCurrentUserId();
+      if (!projectId) {
+        this.$message.error("当前项目ID为空，请重新选择项目后重试");
+        return;
+      }
+      if (!this.knowledgeForm.name) {
+        this.$message.warning("文档名称不能为空");
+        return;
+      }
+      if (this.knowledgeForm.docType !== "folder" && !this.knowledgeForm.content) {
+        this.$message.warning("文档内容不能为空");
+        return;
+      }
 
       const saveRes = await this.$post("/autotest/ai/knowledge", {
+        id: this.knowledgeForm.id || "",
         projectId: projectId,
+        parentId: this.knowledgeForm.parentId || "0",
         name: this.knowledgeForm.name,
         docType: this.knowledgeForm.docType,
-        content: this.knowledgeForm.content,
+        content: this.knowledgeForm.docType === "folder" ? "" : this.knowledgeForm.content,
         sourceType: "manual",
         updateUser: userId,
       });
 
       const knowledgeId = this.getResponseData(saveRes);
 
-      if (knowledgeId) {
+      if (
+        typeof knowledgeId === "string" &&
+        knowledgeId &&
+        this.knowledgeForm.docType !== "folder"
+      ) {
         try {
           await this.$post(
             `/autotest/ai/knowledge/index/${knowledgeId}?projectId=${projectId}`
@@ -659,29 +1217,68 @@ export default {
         this.$message.success("保存成功");
       }
       this.showKnowledgeDialog = false;
-      this.knowledgeForm = { name: "", docType: "manual", content: "" };
+      this.closeKnowledgeDialog();
+      this.loadKnowledgeList();
+    },
+
+    knowledgeStatusType(status) {
+      if (status === "ready") return "success";
+      if (status === "error") return "danger";
+      return "warning";
+    },
+
+    knowledgeStatusText(status) {
+      if (status === "ready") return "已索引";
+      if (status === "error") return "索引失败";
+      return "待索引";
+    },
+
+    formatDocType(docType) {
+      if (docType === "manual") return "使用手册";
+      if (docType === "guide") return "引导文档";
+      if (docType === "api_doc") return "接口文档";
+      if (docType === "custom") return "自定义";
+      return docType || "-";
+    },
+
+    async reindexKnowledge(kb) {
+      const projectId = this.getCurrentProjectId();
+      if (!projectId || !kb || !kb.id) return;
+      await this.$post(`/autotest/ai/knowledge/index/${kb.id}?projectId=${projectId}`);
+      this.$message.success("索引提交成功");
+      this.loadKnowledgeList();
+    },
+
+    async deleteKnowledge(kb) {
+      const projectId = this.getCurrentProjectId();
+      if (!projectId || !kb || !kb.id) return;
+      await this.$delete(`/autotest/ai/knowledge/${kb.id}?projectId=${projectId}`);
+      this.$message.success("删除成功");
       this.loadKnowledgeList();
     },
 
     // 用例生成步骤
     async nextCaseStep() {
       if (this.caseGenerateStep === 0) {
-        // 获取接口列表
-        const projectId =
-          this.$store.state.project?.id || localStorage.getItem("projectId");
+        const projectId = this.getCurrentProjectId();
+        if (!projectId) {
+          this.$message.error("当前项目ID为空，请重新选择项目后重试");
+          return;
+        }
         const res = await this.$get(`/autotest/ai/agent/api-list/${projectId}`);
         const data = this.getResponseData(res);
-        if (data && data.data) {
-          this.apiList = data.data;
-        }
+        this.apiList = Array.isArray(data) ? data : [];
         this.caseGenerateStep = 1;
       }
     },
 
     // 生成用例
     async generateCase() {
-      const projectId =
-        this.$store.state.project?.id || localStorage.getItem("projectId");
+      const projectId = this.getCurrentProjectId();
+      if (!projectId) {
+        this.$message.error("当前项目ID为空，请重新选择项目后重试");
+        return;
+      }
 
       this.$message.info("正在生成用例，请稍候...");
 
@@ -750,6 +1347,14 @@ export default {
   padding: 10px;
 }
 
+.knowledge-entry {
+  padding: 16px 10px;
+}
+
+.knowledge-manage {
+  padding: 10px 0;
+}
+
 .conversation-item {
   display: flex;
   align-items: center;
@@ -777,16 +1382,43 @@ export default {
   white-space: nowrap;
 }
 
-.knowledge-item {
+.knowledge-toolbar {
   display: flex;
-  align-items: center;
-  padding: 10px;
-  border-bottom: 1px solid #e4e7ed;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 
-.knowledge-item span {
-  flex: 1;
-  margin: 0 10px;
+.knowledge-manage >>> .el-tree-node__content,
+.knowledge-list >>> .el-tree-node__content {
+  height: 36px;
+}
+
+.knowledge-node {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.knowledge-node-main {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.knowledge-node-title {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-node-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .sidebar-footer {
@@ -915,6 +1547,42 @@ export default {
 .message.assistant .bubble {
   background: #fff;
   border: 1px solid #e4e7ed;
+}
+
+.message.assistant .bubble >>> h1,
+.message.assistant .bubble >>> h2,
+.message.assistant .bubble >>> h3,
+.message.assistant .bubble >>> h4 {
+  margin: 10px 0 6px;
+  line-height: 1.4;
+}
+
+.message.assistant .bubble >>> p {
+  margin: 6px 0;
+}
+
+.message.assistant .bubble >>> pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f5f7fa;
+  padding: 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.message.assistant .bubble >>> code {
+  font-family: Consolas, "Courier New", monospace;
+}
+
+.message.assistant .bubble >>> ul,
+.message.assistant .bubble >>> ol {
+  padding-left: 20px;
+  margin: 8px 0;
+}
+
+.message.assistant .bubble >>> .mermaid {
+  overflow-x: auto;
+  max-width: 100%;
 }
 
 .message .time {

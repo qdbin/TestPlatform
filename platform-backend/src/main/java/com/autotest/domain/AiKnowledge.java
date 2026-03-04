@@ -11,6 +11,7 @@ import java.io.Serializable;
 public class AiKnowledge implements Serializable {
     private String id;
     private String projectId;
+    private String parentId;
     private String name;
     private String content;
     private String docType;

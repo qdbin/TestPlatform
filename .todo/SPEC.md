@@ -1,807 +1,224 @@
-# AI 智能测试助手 - 计划方案说明书
+# AI 相关模块 MVP 规格说明（待办）
 
-## 一、项目概述
+## 需求分析
 
-### 1.1 项目背景
+### 背景说明
+- 平台为 SpringBoot + Vue 的自动化测试平台；AI 模块为新增：SpringBoot 通过 RPC/HTTP 转发调用 FastAPI AI 服务。
+- 目标是在不影响现有稳定模块的前提下，把 AI 对话、知识库、用例生成三条链路打到“可用、可测、可回归”的 MVP。
 
-流马自动化测试平台是一个成熟的分布式 API/Web/App 自动化测试平台，采用 SpringBoot + Vue 架构。为提升平台智能化水平，增加 AI 辅助测试能力，拟开发 AI 智能测试助手模块。
+### 目标说明（MVP）
+- AI 对话：SSE 真流式输出（token 级增量），支持 Markdown/Mermaid 渲染；切换页面不自动中断（默认策略）。
+- 知识库：知识文档管理不嵌入左侧边栏；以弹窗作为管理界面，支持目录树/CRUD/索引状态/重建索引/删除保护。
+- RAG：强制使用向量库检索链路；Embedding 必须可用；索引成功/降级必须可观测。
+- 用例生成：仅对项目中已存在接口生成；输出严格对齐后端新增用例数据结构；预览可编辑；保存真实落库且 `case_api.api_id` 为接口 ID。
 
-### 1.2 项目目标
+### 范围与约束
+- 仅修改新增 AI 相关模块：
+  - 前端：`platform-frontend/src/views/aiAssistant/*`
+  - 后端：`platform-backend` 的 AI 控制器/服务/知识库表与相关接口
+  - AI 服务：`ai-service/app/*`
+- 不允许改动无关正常功能模块；允许“复用既有组件/既有接口”但不得改变其原有行为。
+- 不允许“伪成功”提示：任何保存/索引/生成必须以真实后端结果为准。
 
-1. **AI 对话助手**：基于 RAG 技术的项目知识库问答系统
-2. **智能用例生成**：AI 根据用户需求和项目接口自动生成测试用例
-3. **多项目隔离**：知识库和会话按项目隔离，保证数据安全
+### 需求分析（按功能域拆解）
 
-### 1.3 业务需求确认
+#### 1) 知识库管理（UI/业务）
+- 交互要求
+  - 左侧只保留“知识库”入口与“打开知识库管理”按钮，不展示目录树/文档操作。
+  - 弹窗中展示目录树与文档操作：新建目录/新建文档、查看、编辑、重建索引、删除。
+- 业务规则
+  - `docType=folder` 为目录，仅参与层级关系，不参与索引。
+  - 删除目录前必须校验子节点数量为 0，否则拒绝。
+  - 索引状态需明确区分：未索引/索引成功/索引失败/降级（Embedding 不可用）。
 
-| 需求项         | 确认内容                                                                              |
-| -------------- | ------------------------------------------------------------------------------------- |
-| 对话历史存储   | SpringBoot 数据库（Flyway 管理）                                                      |
-| 知识库隔离     | 按项目隔离                                                                            |
-| 用例生成流程   | 用户输入需求 → AI 查询项目接口列表 → 用户选择接口 → AI 生成用例 → 前端预览 → 确认落库 |
-| 接口数据集成   | 自动将项目接口文档加入知识库                                                          |
-| 对话界面       | 独立页面（左侧导航"AI 助手"入口）                                                     |
-| 输出方式       | SSE 流式输出                                                                          |
-| Agent 数据获取 | FastAPI 直接调用 SpringBoot REST API                                                  |
+#### 2) 对话（SSE/体验）
+- 必须是真流式：AI 服务对 LLM 使用 stream 模式并逐 token 产出，禁止“整段生成后切片假流式”。
+- 对话页面切换行为
+  - 默认：切换到其他页面不自动中断正在生成的对话（持续在后台生成，返回后可继续看到输出）。
+  - 可选：提供“离开确认并中断”的策略开关（不作为 MVP 强制，但需预留设计位）。
 
-## 二、技术架构设计
+#### 3) RAG（向量检索强制）
+- 必须启用向量检索：向量入库与 query 检索都可验证（返回引用片段/来源元信息）。
+- Embedding 运行环境稳定性
+  - Windows 环境下 `sentence-transformers/torch` 可能出现 DLL 初始化失败（如 `c10.dll`），需采用不依赖本地 Torch 的 Embedding 方案（优先：OpenAI 兼容 Embeddings API）。
+  - Embedding 不可用时不得静默降级并标记“已索引”；必须对外返回 degraded + error。
 
-### 2.1 整体架构
+#### 4) 用例生成（接口ID驱动 + 复用既有组件）
+- 前置约束
+  - 项目用例与接口是 1 对多：新增用例提交步骤时提交的是 `api_id`（即 `caseApis[].apiId`）。
+  - 用例生成只允许选择项目内存在的接口；不存在接口需先走“接口生成 -> 复用接口新增组件 -> 用户保存”。
+- 输出要求
+  - AI 服务返回的用例必须严格对齐后端新增用例结构（`CaseRequest`），其中步骤必须包含 `caseApis[].apiId`。
+  - 预览不可使用纯 JSON `<pre>`；必须复用“用例管理-新增用例（API）”组件，解析 JSON 后灌入表单供用户编辑并保存。
+- 异常处理
+  - 生成 JSON 非法：服务端修复失败则报错；前端不进入“保存成功”分支。
+  - 保存失败：前端展示后端错误 message，不弹成功。
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              流马测试平台                                     │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  ┌─────────────────────────────┐    ┌─────────────────────────────┐       │
-│  │         Vue前端              │    │       SpringBoot后端         │       │
-│  │  (新增AI助手页面)            │    │  (新增AI Controller/Service) │       │
-│  └──────────────┬──────────────┘    └──────────────┬──────────────┘       │
-│                 │ HTTP API                           │ HTTP API              │
-│                 │                                    │                      │
-│                 └────────────────────────────────────┼──────────────────────┘
-│                                                      │
-│                                                      ▼
-│  ┌─────────────────────────────────────────────────────────────────────┐  │
-│  │                        AI服务 (FastAPI独立部署)                       │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌──────────┐ │  │
-│  │  │   RAG模块   │  │   Agent     │  │  LangChain  │  │  Chroma  │ │  │
-│  │  │  (知识问答)  │  │ (用例生成)  │  │   (LLM调用)  │  │ (向量存储)│ │  │
-│  │  └─────────────┘  └─────────────┘  └─────────────┘  └──────────┘ │  │
-│  │                                                                     │  │
-│  │  ┌─────────────┐  ┌─────────────┐                                  │  │
-│  │  │   bge-small │  │  DeepSeek   │                                  │  │
-│  │  │   -zh-v1.5  │  │   /GPT-4    │                                  │  │
-│  │  │ (Embedding) │  │   (LLM)     │                                  │  │
-│  │  └─────────────┘  └─────────────┘                                  │  │
-│  └─────────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+### 非功能需求
+- 安全：不打印/回显 DeepSeek API-Key；仅在服务端配置读取。
+- 可观测：AI 服务提供诊断能力（RAG 状态、Embedding 错误）；后端与前端将关键错误呈现为可定位信息。
+- 回归控制：AI 模块改动需有单元测试与端到端联调验证清单。
 
-### 2.2 目录结构
+## 设计实现
 
-```
-TestPlatform/
-├── platform-backend/                    # SpringBoot后端 (已有)
-│   └── src/main/java/com/autotest/
-│       ├── controller/
-│       │   └── AiController.java        # 新增AI控制器
-│       ├── service/
-│       │   └── AiService.java          # 新增AI服务
-│       ├── domain/
-│       │   ├── AiKnowledge.java        # 新增知识库实体
-│       │   └── AiConversation.java     # 新增会话实体
-│       ├── mapper/
-│       │   ├── AiKnowledgeMapper.java  # 新增
-│       │   └── AiConversationMapper.java # 新增
-│       ├── dto/
-│       │   ├── AiChatRequest.java      # 新增
-│       │   └── AiChatResponse.java     # 新增
-│       └── resources/
-│           └── db/
-│               └── V1.26__init_ai.sql  # 新增Flyway脚本
-│
-├── platform-frontend/                    # Vue前端 (已有)
-│   └── src/
-│       ├── views/
-│       │   └── aiAssistant/           # 新增AI助手页面
-│       │       ├── index.vue           # 对话主页
-│       │       ├── chatWindow.vue      # 聊天窗口组件
-│       │       └── casePreview.vue     # 用例预览组件
-│       └── router/
-│           └── index.js                # 新增路由配置
-│
-└── ai-service/                         # 新增AI服务
-    ├── app/
-    │   ├── main.py                     # FastAPI入口
-    │   ├── config.py                   # 配置管理
-    │   ├── routers/
-    │   │   ├── chat.py                 # 对话路由
-    │   │   ├── knowledge.py            # 知识库路由
-    │   │   └── agent.py                # Agent路由
-    │   ├── services/
-    │   │   ├── llm_service.py          # LLM服务
-    │   │   ├── rag_service.py          # RAG服务
-    │   │   └── agent_service.py        # Agent服务
-    │   ├── tools/
-    │   │   └── platform_tools.py       # 平台API调用工具
-    │   └── utils/
-    │       ├── embeddings.py            # Embedding工具
-    │       └── chunking.py             # 文档分块工具
-    ├── knowledge/                      # 知识库文档存储
-    │   └── {project_id}/
-    │       └── *.md
-    ├── requirements.txt                # Python依赖
-    ├── config.yaml                     # 配置文件
-    └── README.md                       # 服务说明
+### 技术架构说明（系统整体架构图）
+```mermaid
+flowchart TB
+  subgraph FE["前端 (Vue)"]
+    FE_AI["AI助手页面(对话/入口)"]
+    FE_KM["知识库管理弹窗"]
+    FE_Case["用例生成弹窗(复用用例新增组件)"]
+    FE_Api["接口生成弹窗(复用接口新增组件)"]
+  end
+
+  subgraph BE["后端 (SpringBoot)"]
+    BE_AI["AiController/AiService(转发+鉴权+落库)"]
+    DB_KB["ai_knowledge(+parent_id)"]
+    DB_API["api"]
+    DB_CASE["case/case_api"]
+  end
+
+  subgraph AIS["AI服务 (FastAPI)"]
+    AIS_CHAT["/ai/chat/stream 真SSE"]
+    AIS_KB["/ai/knowledge/index + /search"]
+    AIS_AGENT["/ai/agent/* (LangChain ReAct)"]
+    AIS_RAG["RAGService(Chroma + Embeddings API)"]
+    AIS_LLM["LLMService(DeepSeek stream)"]
+  end
+
+  FE_AI -->|SSE| BE_AI -->|SSE| AIS_CHAT --> AIS_LLM
+  FE_KM -->|HTTP| BE_AI -->|HTTP| AIS_KB --> AIS_RAG
+  FE_Case -->|HTTP| BE_AI -->|HTTP| AIS_AGENT
+  AIS_AGENT -->|HTTP| BE_AI
+  BE_AI --> DB_KB
+  BE_AI --> DB_API
+  BE_AI --> DB_CASE
 ```
 
-## 三、数据库设计
+### 模块详情结构图（目标模块内部拆分）
+```mermaid
+flowchart LR
+  subgraph Front["aiAssistant/index.vue"]
+    Chat["对话区(SSE reader + 渲染)"]
+    KMEntry["知识库入口按钮"]
+    KMDialog["知识库管理弹窗(目录树/CRUD/索引)"]
+    CaseDialog["用例生成弹窗(选择接口->生成->编辑->保存)"]
+    ApiDialog["接口生成弹窗(生成->渲染->保存)"]
+  end
 
-### 3.1 新增表结构 (Flyway: V1.26\_\_init_ai.sql)
+  subgraph Back["AiController/AiService"]
+    ChatStream["chat/stream(SseEmitter转发)"]
+    KBProxy["knowledge CRUD/index 代理"]
+    AgentProxy["generate/case 代理"]
+    ApiProxy["复用 /autotest/api/*"]
+    CaseSave["复用 /autotest/case/save"]
+  end
 
-```sql
--- AI知识库文档表
-CREATE TABLE IF NOT EXISTS ai_knowledge (
-    id VARCHAR(32) PRIMARY KEY COMMENT '主键ID',
-    project_id VARCHAR(32) NOT NULL COMMENT '所属项目ID',
-    name VARCHAR(255) NOT NULL COMMENT '文档名称',
-    content TEXT COMMENT '文档内容(Markdown)',
-    doc_type VARCHAR(32) DEFAULT 'manual' COMMENT 'manual:使用手册 guide:引导文档 api_doc:接口文档 custom:自定义',
-    source_type VARCHAR(32) DEFAULT 'manual' COMMENT 'manual:手动上传 auto:自动生成',
-    status VARCHAR(16) DEFAULT 'active' COMMENT 'active:有效 deleted:已删除',
-    create_time BIGINT NOT NULL COMMENT '创建时间戳',
-    update_time BIGINT NOT NULL COMMENT '更新时间戳',
-    create_user VARCHAR(32) COMMENT '创建人',
-    update_user VARCHAR(32) COMMENT '更新人',
-    INDEX idx_project (project_id),
-    INDEX idx_type (doc_type),
-    INDEX idx_status (status)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI知识库文档表';
-
--- AI会话历史表
-CREATE TABLE IF NOT EXISTS ai_conversation (
-    id VARCHAR(32) PRIMARY KEY COMMENT '主键ID',
-    project_id VARCHAR(32) NOT NULL COMMENT '项目ID',
-    user_id VARCHAR(32) NOT NULL COMMENT '用户ID',
-    session_type VARCHAR(32) DEFAULT 'chat' COMMENT 'chat:知识问答 case_generate:用例生成',
-    title VARCHAR(255) COMMENT '会话标题',
-    messages JSON NOT NULL COMMENT '对话消息JSON: [{role: user/assistant, content: 内容, time: 时间戳}]',
-    context JSON COMMENT '上下文数据: {selected_apis: [], current_case: {}}',
-    use_rag TINYINT(1) DEFAULT 1 COMMENT '是否启用RAG',
-    status VARCHAR(16) DEFAULT 'active' COMMENT 'active:有效 closed:已关闭',
-    create_time BIGINT NOT NULL COMMENT '创建时间戳',
-    update_time BIGINT NOT NULL COMMENT '更新时间戳',
-    INDEX idx_project_user (project_id, user_id),
-    INDEX idx_session_type (session_type),
-    INDEX idx_status (status)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI会话历史表';
-
--- AI配置表
-CREATE TABLE IF NOT EXISTS ai_config (
-    id VARCHAR(32) PRIMARY KEY COMMENT '主键ID',
-    config_key VARCHAR(64) NOT NULL COMMENT '配置键: provider/model/api_key/base_url',
-    config_value VARCHAR(500) COMMENT '配置值',
-    is_global TINYINT(1) DEFAULT 0 COMMENT '是否全局配置(1:全局 0:项目级)',
-    project_id VARCHAR(32) COMMENT '项目ID(全局配置时为空)',
-    status VARCHAR(16) DEFAULT 'active' COMMENT 'active:有效 deleted:已删除',
-    create_time BIGINT NOT NULL COMMENT '创建时间戳',
-    update_time BIGINT NOT NULL COMMENT '更新时间戳',
-    UNIQUE KEY uk_key_project (config_key, project_id),
-    INDEX idx_global (is_global)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI配置表';
-
--- AI接口索引表(记录哪些接口已加入知识库)
-CREATE TABLE IF NOT EXISTS ai_api_index (
-    id VARCHAR(32) PRIMARY KEY COMMENT '主键ID',
-    project_id VARCHAR(32) NOT NULL COMMENT '项目ID',
-    api_id VARCHAR(32) NOT NULL COMMENT '接口ID',
-    api_name VARCHAR(255) COMMENT '接口名称',
-    api_path VARCHAR(500) COMMENT '接口路径',
-    api_method VARCHAR(16) COMMENT '请求方法',
-    api_info TEXT COMMENT '接口详细信息(JSON)',
-    indexed_status VARCHAR(16) DEFAULT 'pending' COMMENT 'pending:待索引 ready:已索引 error:索引失败',
-    error_msg VARCHAR(500) COMMENT '错误信息',
-    create_time BIGINT NOT NULL COMMENT '创建时间戳',
-    update_time BIGINT NOT NULL COMMENT '索引时间戳',
-    INDEX idx_project (project_id),
-    INDEX idx_api (api_id),
-    INDEX idx_status (indexed_status)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI接口索引表';
+  subgraph AI["ai-service"]
+    ChatRoute["chat.py(LLM stream->SSE)"]
+    AgentRoute["agent.py(ReAct)"]
+    RagSvc["rag_service.py(向量索引/检索)"]
+    Tools["platform_tools.py(后端API封装)"]
+  end
 ```
 
-## 四、SpringBoot 后端设计
+### 数据流转图（核心链路）
 
-### 4.1 Controller 层
-
-**AiController.java** - AI 控制器
-
-| 接口                              | 方法   | 说明                 |
-| --------------------------------- | ------ | -------------------- |
-| `/autotest/ai/chat`               | POST   | AI 对话(SSE 流式)    |
-| `/autotest/ai/chat/history`       | GET    | 获取会话历史列表     |
-| `/autotest/ai/chat/{id}`          | GET    | 获取会话详情         |
-| `/autotest/ai/chat/{id}`          | DELETE | 删除会话             |
-| `/autotest/ai/knowledge`          | GET    | 获取知识库列表       |
-| `/autotest/ai/knowledge`          | POST   | 新增知识库文档       |
-| `/autotest/ai/knowledge/{id}`     | PUT    | 更新知识库文档       |
-| `/autotest/ai/knowledge/{id}`     | DELETE | 删除知识库文档       |
-| `/autotest/ai/knowledge/index`    | POST   | 触发知识库索引       |
-| `/autotest/ai/knowledge/sync-api` | POST   | 同步项目接口到知识库 |
-| `/autotest/ai/generate/case`      | POST   | 生成测试用例(草稿)   |
-| `/autotest/ai/generate/case/save` | POST   | 确认并保存用例       |
-| `/autotest/ai/config`             | GET    | 获取 AI 配置         |
-| `/autotest/ai/config`             | POST   | 保存 AI 配置         |
-
-### 4.2 Service 层
-
-**AiService.java** - AI 服务
-
-```java
-@Service
-@Transactional(rollbackFor = Exception.class)
-public class AiService {
-
-    // 对话服务
-    public String chat(AiChatRequest request);
-    public List<AiConversation> getConversationList(String projectId, String userId);
-    public AiConversation getConversationDetail(String conversationId);
-    public void deleteConversation(String conversationId);
-
-    // 知识库服务
-    public List<AiKnowledge> getKnowledgeList(String projectId);
-    public String saveKnowledge(AiKnowledge knowledge);
-    public void updateKnowledge(AiKnowledge knowledge);
-    public void deleteKnowledge(String knowledgeId);
-    public void indexKnowledge(String knowledgeId);
-    public void syncProjectApis(String projectId);
-
-    // 用例生成服务
-    public Map<String, Object> generateCaseDraft(AiGenerateCaseRequest request);
-    public void saveGeneratedCase(String caseData);
-
-    // 配置服务
-    public AiConfig getConfig(String projectId);
-    public void saveConfig(AiConfig config);
-}
+#### 1) 对话（真流式）
+```mermaid
+sequenceDiagram
+  participant U as 用户
+  participant FE as Vue
+  participant BE as SpringBoot
+  participant AI as FastAPI
+  participant LLM as DeepSeek
+  U->>FE: 输入问题(useRag可选)
+  FE->>BE: POST /autotest/ai/chat/stream (SSE)
+  BE->>AI: POST /ai/chat/stream (SSE)
+  AI->>LLM: chat.completions(stream=true)
+  loop token
+    LLM-->>AI: delta token
+    AI-->>BE: data:{type:"content",delta:"..."}
+    BE-->>FE: data:{type:"content",delta:"..."}
+  end
+  AI-->>BE: data:{type:"end"}
+  BE-->>FE: data:{type:"end"}
 ```
 
-### 4.3 调用 AI 服务
-
-```java
-@Service
-public class AiClientService {
-
-    @Value("${ai.service.url}")
-    private String aiServiceUrl;
-
-    @Value("${ai.service.api-key}")
-    private String aiApiKey;
-
-    // 对话(SSE流式)
-    public Flux<String> chatStream(AiChatRequest request);
-
-    // 用例生成
-    public Map<String, Object> generateCase(AiGenerateCaseRequest request);
-
-    // 知识库操作
-    public void indexDocument(String knowledgeId, String content);
-    public List<String> searchKnowledge(String query, String projectId);
-}
+#### 2) 知识库索引与检索（向量优先）
+```mermaid
+sequenceDiagram
+  participant FE as 知识库管理弹窗
+  participant BE as SpringBoot
+  participant AI as FastAPI
+  participant V as Chroma
+  participant E as Embeddings API
+  FE->>BE: 保存文档(ai_knowledge)
+  FE->>BE: 索引 /autotest/ai/knowledge/index/{id}
+  BE->>AI: /ai/knowledge/index(chunks)
+  AI->>E: embeddings.create(inputs)
+  AI->>V: upsert(vectors,metadatas)
+  AI-->>BE: {indexed:true,vectorCount:n}
+  BE-->>FE: 更新索引状态与错误原因
 ```
 
-## 五、FastAPI AI 服务设计
-
-### 5.1 核心路由
-
-**routers/chat.py** - 对话路由
-
-```python
-@router.post("/chat")
-async def chat(request: ChatRequest):
-    """AI对话接口(SSE流式返回)"""
-    # 1. 获取项目上下文(接口列表、函数列表等)
-    # 2. 判断是否启用RAG
-    # 3. 构建Prompt
-    # 4. 调用LLM生成回答
-    # 5. 流式返回
-    pass
-
-@router.post("/chat/stream")
-async def chat_stream(request: ChatRequest):
-    """SSE流式对话"""
-    pass
-
-@router.get("/history/{conversation_id}")
-async def get_history(conversation_id: str):
-    """获取会话历史"""
-    pass
+#### 3) 用例生成（接口ID驱动 + 不存在接口先生成）
+```mermaid
+sequenceDiagram
+  participant FE as Vue
+  participant BE as SpringBoot
+  participant AI as FastAPI(ReAct)
+  participant API as 接口库(api)
+  participant CASE as 用例库(case/case_api)
+  FE->>BE: 获取接口列表 /autotest/ai/agent/api-list/{projectId}
+  BE->>AI: /ai/agent/api-list/{projectId}
+  AI->>API: 拉取项目接口(含id)
+  AI-->>FE: 可选接口清单
+  FE->>BE: 生成用例(selectedApis=[apiId])
+  BE->>AI: /ai/agent/generate-case
+  AI->>API: 拉取每个apiId详情并理解
+  AI-->>FE: CaseRequest JSON(含caseApis[].apiId)
+  FE->>FE: 灌入用例新增组件并允许编辑
+  FE->>BE: 保存 /autotest/case/save
+  BE->>CASE: 落库(写case_api.api_id)
+  BE-->>FE: 成功/失败真实反馈
 ```
 
-**routers/knowledge.py** - 知识库路由
+### 关键实现方案（最小改动优先）
 
-```python
-@router.post("/index")
-async def index_document(request: IndexRequest):
-    """文档索引"""
-    # 1. 文档分块
-    # 2. Embedding向量化
-    # 3. 存储到Chroma
-    pass
+#### 1) Embedding 与 RAG（修复 WinError 1114）
+- Embedding 方案调整：优先使用 `langchain-openai` 的 Embeddings（OpenAI 兼容协议）并配置 DeepSeek `base_url`，避免本地 `torch` DLL 依赖。
+- 可观测性：RAG 必须暴露 `available/degraded/last_error/vector_count`，索引接口返回 `indexed` 与原因，前端据此展示状态。
 
-@router.delete("/index/{knowledge_id}")
-async def delete_index(knowledge_id: str):
-    """删除索引"""
-    pass
+#### 2) 真流式输出
+- FastAPI：对 LLM 走流式接口，逐 chunk 直接 yield SSE（`type=content`），结束 yield `type=end`。
+- SpringBoot：只做 SSE 转发；若客户端断开，需尽快中断下游读流并回收资源。
 
-@router.post("/search")
-async def search_knowledge(request: SearchRequest):
-    """知识检索"""
-    # 1. 查询向量
-    # 2. 返回相关片段
-    pass
+#### 3) 知识库弹窗化
+- 左侧知识库 Tab：只保留入口按钮；弹窗内放置目录树与所有操作。
+- 目录树数据源：后端返回平铺列表（含 parentId），前端构建树；目录节点操作与文档节点操作不同。
 
-@router.post("/sync/api")
-async def sync_project_apis(project_id: str, apis: List[ApiInfo]):
-    """同步项目接口到知识库"""
-    # 将接口信息转换为文档并索引
-    pass
-```
+#### 4) 用例生成“可编辑预览 + 真保存”
+- 前端：用例生成第 3 步不再 `<pre>`，改为挂载 `apiCaseEdit` 复用组件（以“组件模式”打开并填充数据）。
+- 后端：删除 `/autotest/ai/generate/case/save` 占位或改为真实调用 `/autotest/case/save`；成功提示由真实返回驱动。
+- AI 服务：生成用例前必须查询接口 ID 列表并仅以 ID 组装；对不存在接口返回 `missingApis` 指示前端进入“接口生成”流程。
 
-**routers/agent.py** - Agent 路由
+### 业务逻辑设计
 
-```python
-@router.post("/generate/case")
-async def generate_case(request: GenerateCaseRequest):
-    """AI用例生成"""
-    # 1. 调用平台工具获取接口列表
-    # 2. 让用户选择接口
-    # 3. 生成用例JSON
-    # 4. 返回预览
-    pass
+#### 对话异常处理机制
+- 下游 AI 服务不可用：SSE 推送 `type=error` 且 message 可定位（超时/鉴权/网络）。
+- LLM 流中断：立即 push `type=error`，并在前端允许继续发送下一条。
 
-@router.post("/generate/case/refine")
-async def refine_case(request: RefineCaseRequest):
-    """用例优化"""
-    pass
-```
+#### RAG 异常处理机制
+- Embedding 不可用：索引接口必须返回 `indexed=false` + `degraded=true` + `error`；检索接口必须返回 `degraded=true` 并阻断“向量检索成功”的误判。
+- Chroma 数据损坏/collection 不存在：返回明确错误与自愈建议（重建索引）。
 
-### 5.2 LangChain Agent 设计
+#### 用例生成异常处理机制
+- 接口不存在：返回 `missingApis`（含 name/method/path 建议），前端触发接口生成弹窗并复用接口新增组件。
+- 生成 JSON 不合法：返回错误，不进入“确认保存”步骤。
 
-**tools/platform_tools.py** - 平台 API 调用工具
+### 测试与验收（最小集）
+- FastAPI 单测：RAG 状态、索引、检索、用例生成结构校验、对话流式格式校验。
+- 后端单测：AI 代理接口鉴权/转发、知识库父子删除保护、用例保存结构校验（含 apiId 存在性校验）。
+- 端到端：用真实项目接口与自建文档完成 RAG 命中、用例生成可编辑并真实落库。
 
-```python
-from langchain.agents import Tool
-
-def get_platform_client():
-    """获取平台API客户端"""
-    pass
-
-# 工具1: 获取项目接口列表
-get_api_list_tool = Tool(
-    name="get_api_list",
-    func=lambda project_id: get_platform_client().get_apis(project_id),
-    description="获取项目接口列表，返回接口ID、名称、路径、请求方法"
-)
-
-# 工具2: 获取接口详情
-get_api_detail_tool = Tool(
-    name="get_api_detail",
-    func=lambda api_id: get_platform_client().get_api_detail(api_id),
-    description="获取指定接口的详细信息"
-)
-
-# 工具3: 获取项目环境
-get_environment_tool = Tool(
-    name="get_environment",
-    func=lambda project_id: get_platform_client().get_envs(project_id),
-    description="获取项目的环境配置"
-)
-
-# 工具4: 知识库检索
-search_knowledge_tool = Tool(
-    name="search_knowledge",
-    func=lambda query: search_rag_knowledge(query),
-    description="搜索项目知识库"
-)
-
-# 工具5: 保存用例
-save_case_tool = Tool(
-    name="save_case",
-    func=lambda case_data: get_platform_client().save_case(case_data),
-    description="保存测试用例到平台"
-)
-```
-
-### 5.3 RAG 服务设计
-
-**services/rag_service.py** - RAG 服务
-
-```python
-class RAGService:
-    def __init__(self):
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name='BAAI/bge-small-zh-v1.5',
-            model_kwargs={'device': 'cpu'}
-        )
-        self.client = chromadb.PersistentClient(path="./chroma_data")
-
-    def create_collection(self, project_id: str):
-        """创建项目知识库集合"""
-        return self.client.get_or_create_collection(
-            name=f"project_{project_id}",
-            metadata={"project_id": project_id}
-        )
-
-    def add_document(self, project_id: str, knowledge_id: str, content: str):
-        """添加文档到知识库"""
-        # 1. 文档分块
-        chunks = self.chunk_text(content)
-        # 2. 向量化
-        embeddings = self.embeddings.embed_documents(chunks)
-        # 3. 存储
-        collection = self.create_collection(project_id)
-        collection.add(
-            embeddings=embeddings,
-            documents=chunks,
-            ids=[f"{knowledge_id}_{i}" for i in range(len(chunks))],
-            metadatas=[{"knowledge_id": knowledge_id, "chunk_index": i} for i in range(len(chunks))]
-        )
-
-    def search(self, project_id: str, query: str, top_k: int = 5):
-        """检索知识库"""
-        collection = self.client.get_or_create_collection(name=f"project_{project_id}")
-        query_embedding = self.embeddings.embed_query(query)
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k
-        )
-        return results
-
-    def delete_document(self, knowledge_id: str):
-        """删除知识库文档"""
-        pass
-```
-
-### 5.4 配置管理
-
-**config.yaml** - AI 服务配置
-
-```yaml
-# LLM配置
-llm:
-  provider: "deepseek" # deepseek/openai/anthropic/qwen
-  model: "deepseek-chat"
-  api_key: "${DEEPSEEK_API_KEY}"
-  base_url: "https://api.deepseek.com/v1"
-  temperature: 0.7
-  max_tokens: 2000
-
-# Embedding配置
-embedding:
-  model: "BAAI/bge-small-zh-v1.5"
-  device: "cpu" # cpu/cuda
-  batch_size: 32
-
-# Chroma配置
-vector_store:
-  persist_directory: "./chroma_data"
-  collection_name_prefix: "project_"
-
-# 平台API配置
-platform:
-  base_url: "http://localhost:8080"
-  timeout: 30
-
-# 服务配置
-server:
-  host: "0.0.0.0"
-  port: 8001
-  cors_origins:
-    - "http://localhost:5173"
-    - "http://localhost:8080"
-```
-
-## 六、前端设计
-
-### 6.1 路由配置
-
-```javascript
-// router/index.js 新增
-{
-    path: '/aiAssistant',
-    name: 'AI助手',
-    component: () => import('@/views/aiAssistant/index'),
-    meta: { title: 'AI助手', requiresAuth: true }
-}
-```
-
-### 6.2 页面结构
-
-**views/aiAssistant/index.vue** - AI 助手主页
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  左侧菜单栏 (250px)         │  右侧主区域                     │
-│  ┌─────────────────────┐   │  ┌─────────────────────────┐  │
-│  │ [+ 新建对话]         │   │  │     搜索框              │  │
-│  │ ─────────────────── │   │  └─────────────────────────┘  │
-│  │ 对话历史列表         │   │  ┌─────────────────────────┐  │
-│  │ ├─ 用户登录测试      │   │  │                         │  │
-│  │ ├─ 接口文档查询      │   │  │    聊天消息区域          │  │
-│  │ └─ 用例生成          │   │  │    (消息气泡+时间)       │  │
-│  │                     │   │  │                         │  │
-│  │ ─────────────────── │   │  │                         │  │
-│  │ [x] 知识库管理       │   │  │                         │  │
-│  │ [⚙] 设置            │   │  └─────────────────────────┘  │
-│  └─────────────────────┘   │  ┌─────────────────────────┐  │
-│                            │  │ [🤖] [📎] [📤] [  输入框 ] │  │
-│                            │  │ RAG开关   上传   发送    │  │
-│                            │  └─────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 6.3 核心组件
-
-| 组件                | 说明                                                  |
-| ------------------- | ----------------------------------------------------- |
-| chatWindow.vue      | 聊天窗口组件，支持 SSE 流式输出、Markdown 渲染        |
-| casePreview.vue     | 用例预览组件，展示 AI 生成的用例 JSON，支持编辑和确认 |
-| knowledgeManage.vue | 知识库管理组件，文档上传、索引状态查看                |
-| settings.vue        | AI 配置组件，模型选择、API Key 配置                   |
-
-### 6.4 SSE 流式输出实现
-
-```javascript
-// 使用EventSource或fetch+ReadableStream实现SSE
-async function sendMessage(message, useRag) {
-  const response = await fetch("/autotest/ai/chat/stream", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      token: getToken(),
-    },
-    body: JSON.stringify({
-      message,
-      use_rag: useRag,
-      project_id: currentProjectId,
-    }),
-  });
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const text = decoder.decode(value);
-    // 逐字追加到聊天窗口
-    appendMessage("assistant", text);
-  }
-}
-```
-
-## 七、用例生成流程设计
-
-### 7.1 完整流程
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        AI用例生成流程                                    │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  用户输入需求                                                            │
-│  "帮我测试用户登录接口"                                                   │
-│         │                                                               │
-│         ▼                                                               │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │ Step1: Agent调用平台API获取项目接口列表                            │   │
-│  │   → Tool: get_api_list(project_id)                              │   │
-│  │   返回: [{id: "1", name: "用户登录", path: "/api/login", ...}]   │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│         │                                                               │
-│         ▼                                                               │
-│  前端展示接口列表，用户选择接口                                           │
-│  ☑ 用户登录 /api/login (POST)                                          │
-│  ☐ 用户注册 /api/register (POST)                                       │
-│  ☐ 获取用户信息 /api/user/info (GET)                                   │
-│         │                                                               │
-│         ▼                                                               │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │ Step2: Agent获取选中接口详情 + 知识库检索                         │   │
-│  │   → Tool: get_api_detail(api_id)                                │   │
-│  │   → Tool: search_knowledge("接口格式示例")                       │   │
-│  │   返回: 接口参数、请求格式、已有测试用例等                        │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│         │                                                               │
-│         ▼                                                               │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │ Step3: LLM生成用例JSON                                           │   │
-│  │   Prompt包含:                                                     │   │
-│  │   - 接口信息 (path, method, params)                               │   │
-│  │   - 知识库上下文 (接口格式规范)                                    │   │
-│  │   - 用例模板 (CaseApi结构)                                        │   │
-│  │   - 生成要求 (正向+异常场景)                                       │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│         │                                                               │
-│         ▼                                                               │
-│  前端预览生成用例                                                        │
-│  ┌──────────────────────────────────────────────────────────────┐      │
-│  │ caseName: "用户登录-正常场景"                                   │      │
-│  │ caseApis: [                                                     │      │
-│  │   {                                                             │      │
-│  │     apiId: "1",                                                 │      │
-│  │     method: "POST",                                              │      │
-│  │     path: "/api/login",                                          │      │
-│  │     header: {...},                                               │      │
-│  │     body: {"username": "{{username}}", "password": "{{pwd}}"}, │      │
-│  │     assertion: [                                                │      │
-│  │       {"from": "resBody", "method": "jsonpath",                │      │
-│  │        "expression": "$.code", "assertion": "equals",          │      │
-│  │        "expect": "200"},                                         │      │
-│  │       {"from": "resBody", "method": "jsonpath",                │      │
-│  │        "expression": "$.data.token", "assertion": "notEmpty"}  │      │
-│  │     ]                                                            │      │
-│  │   }                                                             │      │
-│  │ ]                                                                │      │
-│  └──────────────────────────────────────────────────────────────┘      │
-│         │                                                               │
-│         ▼                                                               │
-│  用户确认 → 调用CaseService.saveCase()落库                              │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### 7.2 用例数据结构
-
-生成的用例 JSON 结构（与现有 CaseService 兼容）:
-
-```json
-{
-  "name": "用户登录-正常场景",
-  "type": "API",
-  "level": "P1",
-  "moduleId": "xxx",
-  "projectId": "xxx",
-  "description": "测试用户正常登录场景",
-  "caseApis": [
-    {
-      "apiId": "接口ID",
-      "description": "步骤描述",
-      "header": "{\"Content-Type\": \"application/json\"}",
-      "body": "{\"username\": \"{{username}}\", \"password\": \"{{password}}\"}",
-      "query": "",
-      "assertion": "[{\"from\":\"resBody\",\"method\":\"jsonpath\",\"expression\":\"$.code\",\"assertion\":\"equals\",\"expect\":\"200\"}]",
-      "relation": "[]"
-    }
-  ]
-}
-```
-
-## 八、实施计划
-
-### 8.1 开发阶段划分
-
-| 阶段     | 任务                      | 预估工时  |
-| -------- | ------------------------- | --------- |
-| 阶段一   | 基础设施搭建              | 2 天      |
-|          | - FastAPI 服务框架搭建    | 0.5 天    |
-|          | - Chroma + Embedding 集成 | 0.5 天    |
-|          | - Flyway 数据库脚本       | 0.5 天    |
-|          | - SpringBoot 基础代码     | 0.5 天    |
-| 阶段二   | RAG 知识库功能            | 3 天      |
-|          | - 知识库 CRUD API         | 1 天      |
-|          | - 文档索引流程            | 1 天      |
-|          | - 接口自动同步            | 1 天      |
-| 阶段三   | AI 对话功能               | 3 天      |
-|          | - 对话 API (SSE)          | 1 天      |
-|          | - 前端对话界面            | 1.5 天    |
-|          | - 会话历史管理            | 0.5 天    |
-| 阶段四   | 用例生成 Agent            | 4 天      |
-|          | - Agent 工具开发          | 1 天      |
-|          | - 用例生成逻辑            | 1.5 天    |
-|          | - 前端预览组件            | 1.5 天    |
-| 阶段五   | 联调测试                  | 2 天      |
-|          | - 前后端联调              | 1 天      |
-|          | - AI 服务联调             | 1 天      |
-| **合计** |                           | **14 天** |
-
-### 8.2 依赖项
-
-**Python 依赖 (ai-service/requirements.txt)**
-
-```
-fastapi==0.109.0
-uvicorn==0.27.0
-langchain==0.1.4
-langchain-community==0.0.16
-chromadb==0.4.22
-sentence-transformers==2.3.1
-pydantic==2.5.3
-python-multipart==0.0.6
-sse-starlette==1.8.2
-httpx==0.26.0
-pyyaml==6.0.1
-```
-
-**前端新增依赖**
-
-```
-marked==11.1.1      # Markdown渲染
-highlight.js==11.9.0 # 代码高亮
-```
-
-## 九、配置说明
-
-### 9.1 SpringBoot 配置
-
-```properties
-# application.properties 新增
-ai.service.url=http://localhost:8001
-ai.service.api-key=your-api-key
-```
-
-### 9.2 环境变量
-
-```bash
-# .env (ai-service)
-DEEPSEEK_API_KEY=sk-xxxxxxxx
-PLATFORM_BASE_URL=http://localhost:8080
-```
-
-## 十、接口规范
-
-### 10.1 AI 对话接口
-
-**请求**
-
-```json
-POST /autotest/ai/chat
-{
-    "project_id": "项目ID",
-    "message": "用户消息",
-    "use_rag": true,
-    "conversation_id": "会话ID(新建时为空)"
-}
-```
-
-**响应 (SSE)**
-
-```
-data: {"type": "start"}
-data: {"type": "content", "delta": "你好"}
-data: {"type": "content", "delta": "，我是"}
-data: {"type": "content", "delta": "AI助手"}
-data: {"type": "end"}
-```
-
-### 10.2 用例生成接口
-
-**请求**
-
-```json
-POST /autotest/ai/generate/case
-{
-    "project_id": "项目ID",
-    "user_requirement": "测试用户登录接口",
-    "selected_apis": ["api_id_1", "api_id_2"]
-}
-```
-
-**响应**
-
-```json
-{
-  "case_name": "用户登录测试",
-  "case_description": "测试用户登录接口",
-  "case_type": "API",
-  "case_level": "P1",
-  "case_module_id": "模块ID",
-  "case_apis": [
-    {
-      "api_id": "接口ID",
-      "api_name": "用户登录",
-      "api_method": "POST",
-      "api_path": "/api/login",
-      "step_description": "用户登录",
-      "header": "{\"Content-Type\": \"application/json\"}",
-      "body": "{\"username\": \"{{username}}\", \"password\": \"{{password}}\"}",
-      "assertion": "[...]"
-    }
-  ]
-}
-```
-
-## 十一、注意事项
-
-1. **接口数据同步**: 每次项目接口变动时需触发同步到知识库
-2. **RAG 开关**: 用户可选择是否启用 RAG，关闭时为纯 LLM 对话
-3. **流式输出**: 必须支持 SSE 流式，提升用户体验
-4. **错误处理**: AI 服务调用失败时需有降级处理
-5. **项目隔离**: 所有数据操作必须带 project_id 过滤
-6. **安全**: API Key 等敏感信息存数据库，加密存储
-
-## 十二、相关文档
-
-- [后端 README](../platform-backend/README.md)
-- [前端 README](../platform-frontend/README.md)
-- [引擎 README](../TestEngin/README.md)

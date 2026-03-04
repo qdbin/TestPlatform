@@ -22,4 +22,6 @@ public interface AiKnowledgeMapper {
     List<AiKnowledge> getKnowledgeList(@Param("projectId") String projectId);
     
     List<AiKnowledge> getKnowledgeListByType(@Param("projectId") String projectId, @Param("docType") String docType);
+
+    Integer countChildren(@Param("projectId") String projectId, @Param("parentId") String parentId);
 }

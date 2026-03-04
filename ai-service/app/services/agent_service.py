@@ -5,14 +5,27 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Dict, List, Optional
+from datetime import datetime
 
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain.prompts import PromptTemplate
 from langchain.tools import Tool
+from json_repair import repair_json
 
 from app.services.llm_service import llm_service
 from app.services.rag_service import rag_service
 from app.tools.platform_tools import get_platform_client
+
+ASSISTANT_ROLE_PROMPT = """
+你是接口测试平台的AI服务助手。
+你的身份说明：当用户询问“你是谁/你能做什么”时，明确回答“我是接口测试平台的AI服务助手”，并简要列出你能提供的能力与用户可执行的下一步操作。
+你的能力边界：
+1) 解答接口测试、自动化测试、测试平台使用问题
+2) 基于知识库内容进行问答与总结
+3) 生成结构化测试用例草稿
+4) 对报错、结果、流程给出排查建议
+输出要求：优先简洁、结构清晰；不要编造不存在的平台能力。
+""".strip()
 
 
 def _try_parse_json_object(text: str) -> Optional[Dict[str, Any]]:
@@ -26,11 +39,20 @@ def _try_parse_json_object(text: str) -> Optional[Dict[str, Any]]:
     except Exception:
         pass
 
+    try:
+        repaired_text = repair_json(text, return_objects=False)
+        parsed = json.loads(repaired_text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
     match = re.search(r"\{[\s\S]*\}", text)
     if not match:
         return None
     try:
-        parsed = json.loads(match.group(0))
+        repaired_text = repair_json(match.group(0), return_objects=False)
+        parsed = json.loads(repaired_text)
         if isinstance(parsed, dict):
             return parsed
     except Exception:
@@ -40,6 +62,7 @@ def _try_parse_json_object(text: str) -> Optional[Dict[str, Any]]:
 
 def _case_prompt(
     user_requirement: str,
+    project_id: str,
     api_details: List[Dict[str, Any]],
     knowledge: List[Dict[str, Any]],
 ) -> str:
@@ -50,14 +73,117 @@ def _case_prompt(
         "请根据用户需求、接口详情、以及知识库片段，生成一份符合流马测试平台 CaseRequest 结构的用例JSON。\n"
         "输出必须是一个JSON对象，不要输出任何额外解释或Markdown代码块。\n\n"
         f"用户需求：{user_requirement}\n\n"
+        f"项目ID：{project_id}\n\n"
         f"接口详情(JSON)：{api_block}\n\n"
         f"知识库片段(JSON)：{kb_block}\n\n"
         "要求：\n"
-        "- 用例类型固定为 API\n"
-        "- 至少包含1个正向场景和1个异常场景（可作为同一用例的多个步骤或多个用例）\n"
-        "- 断言尽量基于 resBody jsonpath 对 code/message/data 做校验\n"
-        "- 字段命名使用后端 CaseRequest 常用风格：name/type/level/moduleId/projectId/description/caseApis\n"
+        "- 仅输出一个可直接用于后端 CaseRequest 的 JSON 对象\n"
+        "- 必填字段必须包含：id/num/name/level/moduleId/moduleName/projectId/type/description/caseApis\n"
+        "- id 固定输出空字符串，type 固定输出 API，projectId 必须等于项目ID\n"
+        "- caseApis 中每个步骤必须包含：id/index/caseId/apiId/description/header/body/query/rest/assertion/relation/controller\n"
+        "- 断言尽量基于 resBody jsonpath 对 code/message/data 做校验，controller 中体现前后置动作\n"
+        "- 至少输出2个步骤：1个正向场景 + 1个异常场景\n"
+        "- 输出必须是可被 json-repair 修复为合法 JSON 的对象结构\n"
     )
+
+
+def _normalize_case_api_step(
+    step: Dict[str, Any], fallback_api_id: str, index: int
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(step, dict):
+        return None
+    api_id = str(step.get("apiId") or fallback_api_id or "")
+    if not api_id:
+        return None
+    return {
+        "id": str(step.get("id") or ""),
+        "index": int(step.get("index") if isinstance(step.get("index"), int) else index),
+        "caseId": str(step.get("caseId") or ""),
+        "apiId": api_id,
+        "description": str(step.get("description") or ""),
+        "header": step.get("header") if isinstance(step.get("header"), list) else [],
+        "body": step.get("body") if isinstance(step.get("body"), dict) else {},
+        "query": step.get("query") if isinstance(step.get("query"), list) else [],
+        "rest": step.get("rest") if isinstance(step.get("rest"), list) else [],
+        "assertion": step.get("assertion") if isinstance(step.get("assertion"), list) else [],
+        "relation": step.get("relation") if isinstance(step.get("relation"), list) else [],
+        "controller": step.get("controller") if isinstance(step.get("controller"), list) else [],
+    }
+
+
+def _normalize_case_request(
+    case_obj: Dict[str, Any], project_id: str, api_details: List[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(case_obj, dict):
+        return None
+    first_api_id = ""
+    first_module_id = ""
+    first_module_name = ""
+    if api_details and isinstance(api_details[0], dict):
+        first_api_id = str(api_details[0].get("id") or "")
+        first_module_id = str(api_details[0].get("moduleId") or "")
+        first_module_name = str(api_details[0].get("moduleName") or "")
+    normalized: Dict[str, Any] = dict(case_obj)
+    normalized["id"] = str(normalized.get("id") or "")
+    normalized["num"] = int(normalized.get("num") if isinstance(normalized.get("num"), int) else 0)
+    normalized["name"] = str(normalized.get("name") or f"AI生成用例-{datetime.now().strftime('%m%d%H%M%S')}")
+    normalized["level"] = str(normalized.get("level") or "P1")
+    normalized["moduleId"] = str(normalized.get("moduleId") or first_module_id or "default")
+    normalized["moduleName"] = str(normalized.get("moduleName") or first_module_name or "AI生成模块")
+    normalized["projectId"] = str(normalized.get("projectId") or project_id)
+    normalized["type"] = "API"
+    normalized["thirdParty"] = str(normalized.get("thirdParty") or "")
+    normalized["description"] = str(normalized.get("description") or "AI自动生成API测试用例")
+    normalized["environmentIds"] = (
+        normalized.get("environmentIds")
+        if isinstance(normalized.get("environmentIds"), list)
+        else []
+    )
+    normalized["system"] = str(normalized.get("system") or "web")
+    normalized["commonParam"] = (
+        normalized.get("commonParam")
+        if isinstance(normalized.get("commonParam"), dict)
+        else {}
+    )
+    normalized["status"] = str(normalized.get("status") or "正常")
+    raw_steps = normalized.get("caseApis")
+    if not isinstance(raw_steps, list):
+        raw_steps = []
+    normalized_steps: List[Dict[str, Any]] = []
+    for idx, step in enumerate(raw_steps):
+        normalized_step = _normalize_case_api_step(step, first_api_id, idx)
+        if normalized_step is not None:
+            normalized_steps.append(normalized_step)
+    if not normalized_steps and first_api_id:
+        normalized_steps = [
+            _normalize_case_api_step(
+                {
+                    "index": 0,
+                    "apiId": first_api_id,
+                    "description": "正向场景",
+                    "assertion": [],
+                },
+                first_api_id,
+                0,
+            ),
+            _normalize_case_api_step(
+                {
+                    "index": 1,
+                    "apiId": first_api_id,
+                    "description": "异常场景",
+                    "assertion": [],
+                },
+                first_api_id,
+                1,
+            ),
+        ]
+        normalized_steps = [s for s in normalized_steps if s is not None]
+    if not normalized_steps:
+        return None
+    normalized["caseApis"] = normalized_steps
+    normalized["caseWebs"] = []
+    normalized["caseApps"] = []
+    return normalized
 
 
 class AgentService:
@@ -102,7 +228,9 @@ class AgentService:
             prompt = (
                 f"参考资料：\n{context}\n\n用户问题：{message}\n\n请结合参考资料回答。"
             )
-        reply = llm_service.chat([{"role": "user", "content": prompt}])
+        reply = llm_service.chat(
+            [{"role": "user", "content": prompt}], system_prompt=ASSISTANT_ROLE_PROMPT
+        )
         return {"reply": reply}
 
     def _build_tools(self, project_id: str, token: str, use_rag: bool) -> List[Tool]:
@@ -119,7 +247,9 @@ class AgentService:
             if context:
                 prompt = f"参考资料：\n{context}\n\n用户问题：{query}\n\n请结合参考资料回答。"
 
-            reply = llm_service.chat([{"role": "user", "content": prompt}])
+            reply = llm_service.chat(
+                [{"role": "user", "content": prompt}], system_prompt=ASSISTANT_ROLE_PROMPT
+            )
             return json.dumps({"reply": reply, "case": None}, ensure_ascii=False)
 
         def generate_case(query: str) -> str:
@@ -162,12 +292,15 @@ class AgentService:
             if use_rag and query:
                 knowledge = rag_service.search(project_id, query, top_k=5)
 
-            prompt = _case_prompt(query, api_details, knowledge)
+            prompt = _case_prompt(query, project_id, api_details, knowledge)
             content = llm_service.chat([{"role": "user", "content": prompt}])
-            case_obj = _try_parse_json_object(content) or {
-                "error": "case_json_parse_failed",
-                "raw": content,
-            }
+            parsed = _try_parse_json_object(content)
+            case_obj = _normalize_case_request(parsed or {}, project_id, api_details)
+            if case_obj is None:
+                case_obj = {
+                    "error": "case_json_parse_failed",
+                    "raw": content,
+                }
             reply = "已根据你的描述生成用例草稿（可在平台内再调整断言/参数提取）。"
             return json.dumps({"reply": reply, "case": case_obj}, ensure_ascii=False)
 
@@ -232,15 +365,6 @@ class AgentService:
         if not msg:
             return {"reply": "请先输入问题。"}
 
-        if any(k in msg for k in ["用例", "case", "测试点", "测试用例", "生成"]):
-            result = self.generate_case(project_id, token, msg, selected_apis=[])
-            if isinstance(result, dict) and result.get("case") is not None:
-                return {
-                    "reply": "已根据你的描述生成用例草稿。",
-                    "case": result.get("case"),
-                }
-            return {"reply": "用例生成失败，请检查接口与权限配置。"}
-
         try:
             executor = self._build_executor(project_id, token, use_rag)
             result = executor.invoke({"input": msg})
@@ -267,6 +391,68 @@ class AgentService:
                         return {"reply": "\n".join(lines)}
                 return {"reply": "AI服务未配置，请先在设置中配置可用的模型API Key。"}
             return {"reply": f"AI服务调用失败：{str(e)}"}
+
+    def stream_chat(
+        self, project_id: str, token: str, message: str, use_rag: bool
+    ):
+        msg = (message or "").strip()
+        if not msg:
+            return
+        if any(k in msg for k in ["用例", "case", "测试点", "测试用例", "生成"]):
+            result = self.generate_case(project_id, token, msg, selected_apis=[])
+            reply = "已根据你的描述生成用例草稿。"
+            case_obj = None
+            if isinstance(result, dict):
+                if result.get("status") == "success":
+                    case_obj = result.get("case")
+                if isinstance(result.get("message"), str) and result.get("message"):
+                    reply = result.get("message")
+            for ch in reply:
+                yield {"type": "content", "delta": ch}
+            if case_obj is not None:
+                yield {"type": "case", "case": case_obj}
+            return
+        knowledge: List[Dict[str, Any]] = []
+        if use_rag:
+            knowledge = rag_service.search(project_id, msg, top_k=5)
+        context = "\n\n".join([str(d.get("content") or "") for d in knowledge if d])
+        prompt = msg
+        if context:
+            prompt = f"参考资料：\n{context}\n\n用户问题：{msg}\n\n请结合参考资料回答。"
+        chunks = llm_service.chat_with_stream(
+            [{"role": "user", "content": prompt}], system_prompt=ASSISTANT_ROLE_PROMPT
+        )
+        has_content = False
+        for chunk in chunks:
+            delta = ""
+            if hasattr(chunk, "content"):
+                content = getattr(chunk, "content")
+                if isinstance(content, str):
+                    delta = content
+                elif isinstance(content, list):
+                    parts: List[str] = []
+                    for item in content:
+                        if isinstance(item, str):
+                            parts.append(item)
+                        elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                            parts.append(item.get("text"))
+                    delta = "".join(parts)
+            elif isinstance(chunk, str):
+                delta = chunk
+            if delta:
+                has_content = True
+                if len(delta) > 24:
+                    step = 8
+                    for i in range(0, len(delta), step):
+                        yield {"type": "content", "delta": delta[i : i + step]}
+                else:
+                    yield {"type": "content", "delta": delta}
+        if not has_content:
+            fallback = llm_service.chat(
+                [{"role": "user", "content": prompt}], system_prompt=ASSISTANT_ROLE_PROMPT
+            )
+            if fallback:
+                yield {"type": "content", "delta": fallback}
 
     def get_api_list_for_selection(
         self, project_id: str, token: str
@@ -297,11 +483,12 @@ class AgentService:
         knowledge: List[Dict[str, Any]] = rag_service.search(
             project_id, user_requirement, top_k=5
         )
-        prompt = _case_prompt(user_requirement, api_details, knowledge)
+        prompt = _case_prompt(user_requirement, project_id, api_details, knowledge)
         content = llm_service.chat([{"role": "user", "content": prompt}])
         parsed = _try_parse_json_object(content)
-        if parsed:
-            return {"status": "success", "case": parsed}
+        normalized = _normalize_case_request(parsed or {}, project_id, api_details)
+        if normalized:
+            return {"status": "success", "case": normalized}
         return {
             "status": "error",
             "message": "无法解析用例JSON",

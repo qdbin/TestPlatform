@@ -1,181 +1,63 @@
-# AI 智能测试助手 - 待办事项
+# AI 相关模块 MVP 任务清单（待办）
 
-## 项目信息
+## 需求分析
 
-- **项目名称**: AI 智能测试助手
-- **技术栈**: SpringBoot + Vue + FastAPI + LangChain + Chroma
-- **预计工时**: 14 天
+### 需求澄清与对齐（必须输出到实现约束）
+- [ ] 明确“切页面不断”的默认策略与可选“离开确认中断”策略开关位置
+- [ ] 明确“接口生成”的触发条件与输出形态（仅生成建议/直接生成可保存接口草稿）
+- [ ] 明确“用例生成”输出必须对齐的后端字段集合（CaseRequest + CaseApiRequest）
+- [ ] 明确知识库索引状态在 DB/UI 的最终呈现字段（indexed/degraded/errorMessage/vectorCount）
 
----
+### 依赖关系梳理
+- [ ] 梳理前端复用组件清单：接口新增组件、用例新增组件（API）
+- [ ] 梳理后端可复用接口清单：api/list、api/save、case/save、knowledge CRUD/index
+- [ ] 梳理 AI 服务对后端调用的鉴权方式与超时/重试策略
 
-## 阶段一: 基础设施搭建 (2 天)
+## 设计实现
 
-### 1.1 FastAPI 服务框架搭建
+### P0：知识库弹窗化（UI 与交互）
+- [ ] 左侧“知识库”Tab 仅保留入口按钮，移除目录树与所有文档操作控件
+- [ ] 新增“知识库管理”弹窗：目录树展示、节点操作、新建目录/文档入口
+- [ ] 文档查看/编辑弹窗在“知识库管理”弹窗内联动（避免多处状态不一致）
+- [ ] 删除目录前端提示与后端拦截一致（目录存在子节点时禁止删除）
 
-- [ ] 创建 ai-service 目录结构
-- [ ] 配置 FastAPI 主入口和路由
-- [ ] 配置日志和异常处理
-- [ ] 编写 requirements.txt 依赖
+### P0：RAG 向量检索恢复（Embedding 修复）
+- [ ] 将默认 Embedding 改为 OpenAI 兼容 Embeddings API（DeepSeek base_url）
+- [ ] 增加 RAG 状态诊断接口：embedding 可用性、最近错误、向量库统计
+- [ ] 索引接口返回结构化结果（indexed/degraded/error/vectorCount），前端展示明确状态
+- [ ] 检索接口返回引用片段与元信息（文档id/名称/片段），用于答案引用与调试
 
-### 1.2 Chroma + Embedding 集成
+### P0：对话真流式（端到端）
+- [ ] FastAPI 改造 chat_stream：从 LLM 流式输出逐 token 直接 SSE yield
+- [ ] SpringBoot 转发层：客户端断开时中断下游读流任务并回收资源
+- [ ] 前端 SSE 读取：实时拼接、即时渲染、允许停止；避免“读完才显示”
+- [ ] Mermaid/Markdown 渲染与流式拼接兼容（避免频繁全量重渲染卡顿）
 
-- [ ] 集成 bge-small-zh-v1.5 embedding 模型
-- [ ] 配置 Chroma 向量数据库
-- [ ] 实现文档分块工具
+### P0：路由切换不断（后台不中断）
+- [ ] 移除“离开页面即 abort”的默认行为（或引入 keep-alive 承载 AI 页面）
+- [ ] 若开启“离开确认中断”：在 AI 页面实现 beforeRouteLeave 弹框并按用户选择 abort
+- [ ] 补充回归：切换到其他页面后返回，流式输出仍可继续追加或至少不会破坏会话状态
 
-### 1.3 SpringBoot 基础代码
+### P0：relativeURL.replace 异常修复
+- [ ] 定位触发链路（AI 模块 buildApiUrl/fetch/ajax wrapper）
+- [ ] 统一保证 URL 输入为 string，并对非法值做显式错误（不吞异常）
+- [ ] 增加最小回归验证：对话发送、知识库 CRUD、索引、用例生成均不再触发该报错
 
-- [ ] 创建 Flyway 数据库脚本 V1.26\_\_init_ai.sql
-- [ ] 创建 AiKnowledge/AiConversation 实体类
-- [ ] 创建对应 Mapper 接口和 XML
+### P0：用例生成（接口ID驱动 + 可编辑预览 + 真保存）
+- [ ] FastAPI：生成前查询并校验 selectedApis 均为本项目有效 apiId
+- [ ] FastAPI：对“不存在接口”返回 missingApis，触发前端进入“接口生成”弹窗流程
+- [ ] FastAPI：提示词严格约束输出为 CaseRequest（含 caseApis[].apiId）
+- [ ] 前端：用例预览改为复用 apiCaseEdit 组件并支持编辑（不使用 JSON `<pre>`）
+- [ ] 前端：保存动作调用既有 /autotest/case/save，并以真实返回决定提示
+- [ ] 后端：移除/改造占位 /autotest/ai/generate/case/save，避免误导
+- [ ] 后端：保存时增加 apiId 存在性与 projectId 一致性校验（仅限 AI 路径或通用校验）
 
----
+### P1：接口生成（不存在接口先生成再保存）
+- [ ] FastAPI：实现“接口草稿生成”能力（method/path/name/headers/body/query/rest/描述/模块）
+- [ ] 前端：复用接口管理新增接口组件渲染草稿，用户编辑后保存到后端 api 表
+- [ ] 前端：保存成功后自动回填新 apiId 到“用例生成”已选接口集合
 
-## 阶段二: RAG 知识库功能 (3 天)
-
-### 2.1 知识库 CRUD API
-
-- [ ] 后端 AiController 知识库接口
-- [ ] 后端 AiService 知识库逻辑
-- [ ] 前端知识库管理页面
-
-### 2.2 文档索引流程
-
-- [ ] FastAPI 文档索引接口
-- [ ] 文档分块+向量化+存储流程
-- [ ] 索引状态跟踪和更新
-
-### 2.3 接口自动同步
-
-- [ ] 项目接口同步到知识库功能
-- [ ] 接口信息转换为文档格式
-- [ ] 增量索引支持
-
----
-
-## 阶段三: AI 对话功能 (3 天)
-
-### 3.1 对话 API (SSE)
-
-- [ ] 后端 AI 对话 Controller
-- [ ] 后端 SSE 流式响应处理
-- [ ] FastAPI 对话路由和 LLM 集成
-
-### 3.2 前端对话界面
-
-- [ ] 创建 aiAssistant 目录和页面
-- [ ] 左侧历史会话列表
-- [ ] 右侧聊天窗口(消息气泡)
-- [ ] Markdown 渲染支持
-- [ ] SSE 流式输出实现
-- [ ] RAG 开关、上传附件功能
-
-### 3.3 会话历史管理
-
-- [ ] 会话列表查询
-- [ ] 会话详情查看
-- [ ] 会话删除功能
-
----
-
-## 阶段四: 用例生成 Agent (4 天)
-
-### 4.1 Agent 工具开发
-
-- [ ] 平台 API 调用客户端封装
-- [ ] LangChain Tools 定义
-- [ ] 工具: get_api_list
-- [ ] 工具: get_api_detail
-- [ ] 工具: save_case
-- [ ] 工具: search_knowledge
-
-### 4.2 用例生成逻辑
-
-- [ ] Agent 路由和流程设计
-- [ ] 接口选择和详情获取
-- [ ] LLM 生成用例 JSON
-- [ ] 前端预览组件开发
-- [ ] 用例确认和落库
-
-### 4.3 前端预览组件
-
-- [ ] casePreview.vue 组件
-- [ ] 用例 JSON 展示和编辑
-- [ ] 确认保存功能
-
----
-
-## 阶段五: 联调测试 (2 天)
-
-### 5.1 前后端联调
-
-- [ ] SpringBoot 与 FastAPI 联调
-- [ ] 前端与后端 API 联调
-- [ ] SSE 流式输出测试
-
-### 5.2 AI 服务联调
-
-- [ ] LLM API 调用测试
-- [ ] RAG 检索测试
-- [ ] Agent 工具调用测试
-- [ ] 端到端流程测试
-
----
-
-## 关键里程碑
-
-| 里程碑       | 完成标准                             |
-| ------------ | ------------------------------------ |
-| M1: 基础框架 | FastAPI 服务可启动，Chroma 可用      |
-| M2: 知识库   | 文档上传 → 索引 → 检索全流程通       |
-| M3: 对话     | SSE 流式对话正常，会话保存正常       |
-| M4: 用例生成 | 完整流程:选接口 → 生成 → 预览 → 落库 |
-| M5: 交付     | 前后端联调通过，可演示               |
-
----
-
-## 技术栈清单
-
-### 后端 (SpringBoot)
-
-- [x] SpringBoot 2.6.0
-- [x] MyBatis
-- [x] Flyway
-
-### 前端 (Vue)
-
-- [x] Vue 2.7.16
-- [x] Element UI 2.15.13
-- [ ] marked (Markdown 渲染)
-- [ ] highlight.js (代码高亮)
-
-### AI 服务 (FastAPI)
-
-- [ ] FastAPI 0.109.0
-- [ ] LangChain 0.1.4
-- [ ] Chroma 0.4.22
-- [ ] bge-small-zh-v1.5
-- [ ] DeepSeek API
-
----
-
-## 配置文件清单
-
-| 文件                 | 位置                                                    | 说明         |
-| -------------------- | ------------------------------------------------------- | ------------ |
-| V1.26\_\_init_ai.sql | platform-backend/src/main/resources/db/                 | 数据库脚本   |
-| AiController.java    | platform-backend/src/main/java/com/autotest/controller/ | 后端控制器   |
-| AiService.java       | platform-backend/src/main/java/com/autotest/service/    | 后端服务     |
-| main.py              | ai-service/app/                                         | FastAPI 入口 |
-| config.yaml          | ai-service/                                             | AI 服务配置  |
-| requirements.txt     | ai-service/                                             | Python 依赖  |
-
----
-
-## 注意事项
-
-1. **项目隔离**: 所有接口必须带 project_id 过滤
-2. **RAG 开关**: 用户可选择是否启用 RAG
-3. **流式输出**: 对话必须支持 SSE 流式
-4. **错误处理**: AI 服务调用失败需有降级处理
-5. **API 安全**: API Key 等敏感信息加密存储
+### 测试与验收（必须落地）
+- [ ] FastAPI：补齐 tests/ 单测（RAG/对话流式/用例生成结构校验/接口生成）
+- [ ] SpringBoot：补齐 src/test/java AI 相关测试（知识库删除保护/代理透传/最小保存冒烟）
+- [ ] 端到端：使用真实账号 LMadmin 完成 RAG、对话流式、用例生成与落库验收
