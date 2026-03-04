@@ -8,7 +8,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import json
-import asyncio
 
 from app.services.agent_service import agent_service
 
@@ -75,20 +74,13 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
     async def generate():
         try:
             token = raw_request.headers.get("token") or ""
-            result = agent_service.chat(
+            for event in agent_service.stream_chat(
                 project_id=request.project_id,
                 token=token,
                 message=request.message,
                 use_rag=request.use_rag,
-            )
-
-            reply = str(result.get("reply") or "")
-            for ch in reply:
-                yield f"data: {json.dumps({'type': 'content', 'delta': ch}, ensure_ascii=False)}\n\n"
-                await asyncio.sleep(0.002)
-
-            if result.get("case") is not None:
-                yield f"data: {json.dumps({'type': 'case', 'case': result.get('case')}, ensure_ascii=False)}\n\n"
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
             yield f"data: {json.dumps({'type': 'end'}, ensure_ascii=False)}\n\n"
 

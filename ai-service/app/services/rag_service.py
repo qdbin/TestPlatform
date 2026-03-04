@@ -20,18 +20,22 @@ class RAGService:
         self._embeddings = None
         self._client = None
         self._fallback_docs = None
+        self._embedding_init_failed = False
+        self._embedding_warning_logged = False
 
     def _init_components(self) -> None:
         """延迟初始化向量存储组件"""
-        if self._embeddings is None:
+        if self._embeddings is None and not self._embedding_init_failed:
             try:
                 self._embeddings = HuggingFaceEmbeddings(
                     model_name=config.embedding_model,
                     model_kwargs={"device": config.embedding_device},
                 )
+                self._embedding_init_failed = False
             except Exception as e:
                 print(f"Embedding模型加载失败: {e}")
                 self._embeddings = None
+                self._embedding_init_failed = True
 
         if self._client is None:
             self._client = chromadb.PersistentClient(
@@ -41,7 +45,7 @@ class RAGService:
 
     def _get_collection_name(self, project_id: str) -> str:
         """获取项目对应的collection名称"""
-        return f"{config.chroma_prefix}{project_id}"
+        return f"{config.chroma_prefix}{str(project_id)}"
 
     def _get_fallback_store_path(self) -> str:
         os.makedirs(config.chroma_persist_dir, exist_ok=True)
@@ -70,6 +74,8 @@ class RAGService:
     def _upsert_fallback_docs(
         self, project_id: str, knowledge_id: str, documents: List[str]
     ) -> None:
+        project_id = str(project_id)
+        knowledge_id = str(knowledge_id)
         store = self._load_fallback_docs()
         project_docs = store.get(project_id)
         if not isinstance(project_docs, dict):
@@ -80,6 +86,8 @@ class RAGService:
         self._save_fallback_docs()
 
     def _delete_fallback_docs(self, project_id: str, knowledge_id: str) -> None:
+        project_id = str(project_id)
+        knowledge_id = str(knowledge_id)
         store = self._load_fallback_docs()
         project_docs = store.get(project_id)
         if isinstance(project_docs, dict) and knowledge_id in project_docs:
@@ -91,6 +99,7 @@ class RAGService:
     def _fallback_search(
         self, project_id: str, query: str, top_k: int = 5
     ) -> List[Dict[str, Any]]:
+        project_id = str(project_id)
         store = self._load_fallback_docs()
         project_docs = store.get(project_id)
         if not isinstance(project_docs, dict):
@@ -151,6 +160,8 @@ class RAGService:
         self, project_id: str, knowledge_id: str, documents: List[str]
     ) -> None:
         """添加文档到知识库"""
+        project_id = str(project_id)
+        knowledge_id = str(knowledge_id)
         if not documents:
             return
         self._upsert_fallback_docs(project_id, knowledge_id, documents)
@@ -158,7 +169,9 @@ class RAGService:
         self._init_components()
 
         if self._embeddings is None:
-            print("警告：Embedding模型未加载，已写入回退检索存储")
+            if not self._embedding_warning_logged:
+                print("警告：Embedding模型未加载，已写入回退检索存储")
+                self._embedding_warning_logged = True
             return
 
         embeddings = self._embeddings.embed_documents(documents)
@@ -185,10 +198,13 @@ class RAGService:
         self, project_id: str, query: str, top_k: int = 5
     ) -> List[Dict[str, Any]]:
         """知识库检索"""
+        project_id = str(project_id)
         self._init_components()
 
         if self._embeddings is None:
-            print("警告：Embedding模型未加载，使用回退检索")
+            if not self._embedding_warning_logged:
+                print("警告：Embedding模型未加载，使用回退检索")
+                self._embedding_warning_logged = True
             return self._fallback_search(project_id, query, top_k)
 
         query_embedding = self._embeddings.embed_query(query)
@@ -235,27 +251,28 @@ class RAGService:
 
     def delete_knowledge(self, project_id: str, knowledge_id: str) -> None:
         """删除知识库文档"""
+        project_id = str(project_id)
+        knowledge_id = str(knowledge_id)
         self._delete_fallback_docs(project_id, knowledge_id)
         try:
             self._init_components()
-            collection = self._client.get_collection(
-                name=self._get_collection_name(project_id)
-            )
+            if self._client is None: return
+            
+            collection_name = self._get_collection_name(project_id)
+            try:
+                collection = self._client.get_collection(name=collection_name)
+            except Exception:
+                return
 
-            result = collection.get()
-            if result and result.get("ids"):
-                ids_to_delete = [
-                    id_val
-                    for i, meta in enumerate(result.get("metadatas", []))
-                    if meta.get("knowledge_id") == knowledge_id
-                ]
-                if ids_to_delete:
-                    collection.delete(ids=ids_to_delete)
-        except Exception:
-            pass
+            # 使用 where 过滤器直接删除，比先 get 再 delete 更高效且准确
+            collection.delete(where={"knowledge_id": knowledge_id})
+            
+        except Exception as e:
+            print(f"Chroma删除失败: {e}")
 
     def get_collection_stats(self, project_id: str) -> Dict[str, Any]:
         """获取知识库统计信息"""
+        project_id = str(project_id)
         try:
             self._init_components()
             collection = self._client.get_collection(

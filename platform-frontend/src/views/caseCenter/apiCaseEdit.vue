@@ -533,6 +533,54 @@ export default {
                     }
                     this.caseForm = data;
                 });
+            } else {
+                const projectId = String(this.$store.state.projectId || "");
+                const storageKey = `ai_case_draft_v1:${projectId || "default"}`;
+                const raw = localStorage.getItem(storageKey);
+                if (raw) {
+                    try {
+                        const draft = JSON.parse(raw);
+                        if (draft && typeof draft === "object") {
+                            this.caseForm.id = "";
+                            this.caseForm.name = draft.name || this.caseForm.name;
+                            this.caseForm.level = draft.level || this.caseForm.level;
+                            this.caseForm.type = "API";
+                            this.caseForm.thirdParty = draft.thirdParty || "";
+                            this.caseForm.moduleId = draft.moduleId || "0";
+                            this.caseForm.moduleName = draft.moduleName || "默认模块";
+                            this.caseForm.description = draft.description || "";
+                            this.caseForm.environmentIds = Array.isArray(draft.environmentIds)
+                                ? draft.environmentIds
+                                : [];
+                            this.caseForm.system = draft.system || "web";
+                            this.caseForm.commonParam = draft.commonParam && typeof draft.commonParam === "object"
+                                ? draft.commonParam
+                                : this.caseForm.commonParam;
+                            this.caseForm.status = draft.status || "正常";
+                            this.caseForm.caseApis = Array.isArray(draft.caseApis)
+                                ? draft.caseApis.map((step, index) => ({
+                                    id: step.id || getUUID(),
+                                    index: typeof step.index === "number" ? step.index : index + 1,
+                                    caseId: step.caseId || "",
+                                    apiId: step.apiId || "",
+                                    apiMethod: step.apiMethod || "",
+                                    apiName: step.apiName || "",
+                                    apiPath: step.apiPath || "",
+                                    description: step.description || "",
+                                    header: Array.isArray(step.header) ? step.header : [],
+                                    body: step.body && typeof step.body === "object" ? step.body : { type: "json", form: [], json: "", raw: "", file: [] },
+                                    query: Array.isArray(step.query) ? step.query : [],
+                                    rest: Array.isArray(step.rest) ? step.rest : [],
+                                    assertion: Array.isArray(step.assertion) ? step.assertion : [],
+                                    relation: Array.isArray(step.relation) ? step.relation : [],
+                                    controller: Array.isArray(step.controller) ? step.controller : [],
+                                    edit: false
+                                }))
+                                : [];
+                        }
+                    } catch (e) {}
+                    localStorage.removeItem(storageKey);
+                }
             }
         },
         cancelAdd(){

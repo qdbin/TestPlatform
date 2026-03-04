@@ -15,7 +15,9 @@
         <navcon :breadList="breadList" ></navcon> <!-- 面包屑：依据全局事件更新 -->
       </el-header>
       <el-main class="index-main">  <!-- 主要内容区域：子路由渲染位置 -->
-        <router-view></router-view>  <!-- 子页面渲染入口 -->
+        <keep-alive include="AIAssistant">
+          <router-view></router-view>
+        </keep-alive>
       </el-main>
     </el-container>
   </el-container>

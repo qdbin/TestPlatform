@@ -150,6 +150,23 @@ def test_rag_reindex_same_knowledge(monkeypatch):
     assert stats["count"] == 1
 
 
+def test_rag_project_isolation(monkeypatch):
+    from app.services.rag_service import rag_service
+
+    rag_service._embeddings = DummyEmbeddings()
+    rag_service._client = FakeClient()
+    rag_service._fallback_docs = {}
+
+    rag_service.add_documents("p_a", "k1", ["登录接口A"])
+    rag_service.add_documents("p_b", "k2", ["支付接口B"])
+
+    results_a = rag_service.search("p_a", "登录", top_k=5)
+    results_b = rag_service.search("p_b", "支付", top_k=5)
+    assert any("登录接口A" in item.get("content", "") for item in results_a)
+    assert all("支付接口B" not in item.get("content", "") for item in results_a)
+    assert any("支付接口B" in item.get("content", "") for item in results_b)
+
+
 def test_rag_fallback_search_when_embedding_unavailable(monkeypatch):
     from app.services.rag_service import rag_service
 
@@ -240,6 +257,9 @@ def test_generate_case_json_repair(monkeypatch):
     from app.services import rag_service as rag_service_module
 
     class FakePlatformClient:
+        def get_api_list(self, project_id: str):
+            return [{"id": "api_1"}]
+
         def get_api_detail(self, api_id: str):
             return {
                 "id": api_id,
@@ -267,4 +287,33 @@ def test_generate_case_json_repair(monkeypatch):
     assert result.get("status") == "success"
     assert isinstance(result.get("case"), dict)
     assert result["case"].get("name") == "登录用例"
+    assert result["case"].get("projectId") == "p1"
+
+
+def test_generate_case_needs_api_create(monkeypatch):
+    from app.services import agent_service as agent_service_module
+    from app.services.agent_service import agent_service
+
+    class EmptyPlatformClient:
+        def get_api_list(self, project_id: str):
+            return []
+
+        def get_api_detail(self, api_id: str):
+            return None
+
+    monkeypatch.setattr(agent_service_module, "get_platform_client", lambda token: EmptyPlatformClient())
+    monkeypatch.setattr(
+        agent_service,
+        "_generate_interface_candidates",
+        lambda project_id, requirement: [{"name": "登录接口", "path": "/login", "method": "POST", "description": ""}],
+    )
+    result = agent_service.generate_case(
+        project_id="p2",
+        token="tok",
+        user_requirement="生成登录用例",
+        selected_apis=[],
+    )
+    assert result.get("status") == "needs_api_create"
+    assert isinstance(result.get("interfaces"), list)
+    assert result["interfaces"][0]["path"] == "/login"
 

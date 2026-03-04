@@ -4,9 +4,12 @@ import com.autotest.domain.AiKnowledge;
 import com.autotest.domain.Project;
 import com.autotest.common.exception.LMException;
 import com.autotest.request.AiKnowledgeRequest;
+import com.autotest.request.CaseRequest;
 import com.autotest.service.AiService;
+import com.autotest.service.CaseService;
 import com.autotest.service.ProjectService;
 import com.autotest.mapper.ProjectMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -34,6 +37,12 @@ public class AiController {
 
     @Resource
     private ProjectMapper projectMapper;
+
+    @Resource
+    private CaseService caseService;
+
+    @Resource
+    private ObjectMapper objectMapper;
 
     private String getLoginUserId(HttpServletRequest request) {
         Object userId = request.getSession(true).getAttribute("userId");
@@ -301,9 +310,18 @@ public class AiController {
      * 十三、保存生成的用例
      */
     @PostMapping("/generate/case/save")
-    public Map<String, Object> saveGeneratedCase(@RequestBody Map<String, Object> request) {
-        // TODO: 调用CaseService保存用例
+    public Map<String, Object> saveGeneratedCase(@RequestBody Map<String, Object> request,
+            HttpServletRequest httpServletRequest) {
+        Object caseObj = request.get("case");
+        if (!(caseObj instanceof Map)) {
+            throw new LMException("case参数不能为空");
+        }
+        CaseRequest caseRequest = objectMapper.convertValue(caseObj, CaseRequest.class);
+        assertProjectAccess(httpServletRequest, caseRequest.getProjectId());
+        caseRequest.setUpdateUser(getLoginUserId(httpServletRequest));
+        caseService.saveCase(caseRequest);
         Map<String, Object> result = new HashMap<>();
+        result.put("data", "success");
         result.put("msg", "用例保存成功");
         return result;
     }

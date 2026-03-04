@@ -16,43 +16,35 @@
         >
       </div>
 
-      <el-tabs v-model="activeTab" class="sidebar-tabs">
-        <el-tab-pane label="会话" name="chat">
-          <div class="conversation-list">
-            <div
-              v-for="conv in conversationList"
-              :key="conv.id"
-              class="conversation-item"
-              :class="{ active: currentConversationId === conv.id }"
-              @click="selectConversation(conv)"
-            >
-              <i class="el-icon-chat-line-round"></i>
-              <span class="conv-title">{{ conv.title || "新会话" }}</span>
-              <el-dropdown
-                trigger="click"
-                @command="handleConvCommand($event, conv)"
-              >
-                <i class="el-icon-more"></i>
-                <el-dropdown-menu slot="dropdown">
-                  <el-dropdown-item command="delete">删除</el-dropdown-item>
-                </el-dropdown-menu>
-              </el-dropdown>
-            </div>
-            <div v-if="conversationList.length === 0" class="empty-tip">
-              暂无会话记录
-            </div>
-          </div>
-        </el-tab-pane>
-        <el-tab-pane label="知识库" name="knowledge">
-          <div class="knowledge-entry">
-            <el-button type="primary" size="small" @click="openKnowledgeManage">
-              打开知识库管理
-            </el-button>
-          </div>
-        </el-tab-pane>
-      </el-tabs>
+      <div class="conversation-list">
+        <div
+          v-for="conv in conversationList"
+          :key="conv.id"
+          class="conversation-item"
+          :class="{ active: currentConversationId === conv.id }"
+          @click="selectConversation(conv)"
+        >
+          <i class="el-icon-chat-line-round"></i>
+          <span class="conv-title">{{ conv.title || "新会话" }}</span>
+          <el-dropdown
+            trigger="click"
+            @command="handleConvCommand($event, conv)"
+          >
+            <i class="el-icon-more"></i>
+            <el-dropdown-menu slot="dropdown">
+              <el-dropdown-item command="delete">删除</el-dropdown-item>
+            </el-dropdown-menu>
+          </el-dropdown>
+        </div>
+        <div v-if="conversationList.length === 0" class="empty-tip">
+          暂无会话记录
+        </div>
+      </div>
 
       <div class="sidebar-footer">
+        <el-button size="small" type="primary" @click="openKnowledgeManage">
+          <i class="el-icon-folder"></i> 知识库
+        </el-button>
         <el-button size="small" @click="exportLocalHistory">
           <i class="el-icon-download"></i> 导出
         </el-button>
@@ -109,23 +101,73 @@
               ></i>
             </div>
             <div class="content">
-              <div
-                class="bubble"
-                v-html="
-                  renderContent(
-                    msg.content ||
-                      (msg.role === 'assistant' &&
-                      currentConversationLoading &&
-                      index === messages.length - 1
-                        ? '思考中...'
-                        : '')
-                  )
-                "
-              ></div>
+              <div v-if="msg.role === 'user'" class="bubble user-bubble">
+                {{ msg.content }}
+              </div>
+              <div v-else>
+                <div
+                  class="assistant-markdown"
+                  v-html="
+                    renderContent(
+                      msg.content ||
+                        (currentConversationLoading && index === messages.length - 1
+                          ? '思考中...'
+                          : '')
+                    )
+                  "
+                ></div>
+
+                <!-- 用例生成卡片 -->
+                <div v-if="msg.caseData" class="ai-card case-card">
+                  <div class="card-header">
+                    <i class="el-icon-s-order"></i> 用例草稿已生成
+                  </div>
+                  <div class="card-body">
+                    <p>
+                      已基于现有接口生成测试用例：<strong>{{
+                        msg.caseData.name
+                      }}</strong>
+                    </p>
+                    <div class="card-actions">
+                      <el-button
+                        type="primary"
+                        size="small"
+                        @click="goToCaseDraftEdit(msg.caseData)"
+                      >
+                        编辑并保存用例
+                      </el-button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 接口生成卡片 -->
+                <div v-if="msg.interfaceData" class="ai-card interface-card">
+                  <div class="card-header warning">
+                    <i class="el-icon-warning-outline"></i> 未找到匹配接口
+                  </div>
+                  <div class="card-body">
+                    <p>当前项目未找到匹配的接口。已为你生成接口定义草稿：</p>
+                    <ul class="interface-list">
+                      <li v-for="(item, idx) in msg.interfaceData" :key="idx">
+                        <el-tag size="mini">{{ item.method }}</el-tag>
+                        {{ item.path }}
+                      </li>
+                    </ul>
+                    <div class="card-actions">
+                      <el-button
+                        type="warning"
+                        size="small"
+                        @click="goToInterfaceCreate(msg.interfaceData)"
+                      >
+                        创建接口
+                      </el-button>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <div class="time">{{ formatTime(msg.time) }}</div>
             </div>
           </div>
-
         </div>
       </div>
 
@@ -159,10 +201,19 @@
     >
       <div class="knowledge-manage">
         <div class="knowledge-toolbar">
-          <el-button size="small" icon="el-icon-folder-add" @click="openCreateFolderDialog">
+          <el-button
+            size="small"
+            icon="el-icon-folder-add"
+            @click="openCreateFolderDialog"
+          >
             新建目录
           </el-button>
-          <el-button size="small" icon="el-icon-plus" type="primary" @click="openCreateKnowledgeDialog">
+          <el-button
+            size="small"
+            icon="el-icon-plus"
+            type="primary"
+            @click="openCreateKnowledgeDialog"
+          >
             添加文档
           </el-button>
         </div>
@@ -176,8 +227,16 @@
         >
           <span slot-scope="{ data }" class="knowledge-node">
             <span class="knowledge-node-main">
-              <i :class="data.docType === 'folder' ? 'el-icon-folder' : 'el-icon-document'"></i>
-              <span class="knowledge-node-title">{{ data.name || "未命名文档" }}</span>
+              <i
+                :class="
+                  data.docType === 'folder'
+                    ? 'el-icon-folder'
+                    : 'el-icon-document'
+                "
+              ></i>
+              <span class="knowledge-node-title">{{
+                data.name || "未命名文档"
+              }}</span>
               <el-tag
                 v-if="data.docType !== 'folder'"
                 size="mini"
@@ -243,53 +302,6 @@
       </div>
     </el-dialog>
 
-    <!-- 用例生成对话框 -->
-    <el-dialog
-      title="AI 用例生成"
-      :visible.sync="showCaseGenerate"
-      width="800px"
-    >
-      <el-steps :active="caseGenerateStep" finish-status="success">
-        <el-step title="输入需求"></el-step>
-        <el-step title="选择接口"></el-step>
-        <el-step title="生成用例"></el-step>
-        <el-step title="确认保存"></el-step>
-      </el-steps>
-
-      <div class="case-generate-content">
-        <!-- 步骤1：输入需求 -->
-        <div v-if="caseGenerateStep === 0">
-          <el-input
-            v-model="caseRequirement"
-            type="textarea"
-            :rows="4"
-            placeholder="请描述你的测试需求，如：测试用户登录接口"
-          ></el-input>
-          <el-button type="primary" @click="nextCaseStep">下一步</el-button>
-        </div>
-
-        <!-- 步骤2：选择接口 -->
-        <div v-if="caseGenerateStep === 1">
-          <el-checkbox-group v-model="selectedApis">
-            <el-checkbox v-for="api in apiList" :key="api.id" :label="api.id">
-              {{ api.name }} - {{ api.method }} {{ api.path }}
-            </el-checkbox>
-          </el-checkbox-group>
-          <el-button @click="caseGenerateStep = 0">上一步</el-button>
-          <el-button type="primary" @click="generateCase">生成用例</el-button>
-        </div>
-
-        <!-- 步骤3：生成用例 -->
-        <div v-if="caseGenerateStep === 2">
-          <pre class="case-preview">{{ generatedCase }}</pre>
-          <el-button @click="caseGenerateStep = 1">上一步</el-button>
-          <el-button type="primary" @click="saveGeneratedCase"
-            >确认并保存</el-button
-          >
-        </div>
-      </div>
-    </el-dialog>
-
     <!-- 知识库添加对话框 -->
     <el-dialog
       :title="knowledgeDialogTitle"
@@ -318,7 +330,10 @@
             <el-option label="目录" value="folder"></el-option>
           </el-select>
         </el-form-item>
-        <el-form-item label="文档内容" v-if="knowledgeForm.docType !== 'folder'">
+        <el-form-item
+          label="文档内容"
+          v-if="knowledgeForm.docType !== 'folder'"
+        >
           <el-input
             v-model="knowledgeForm.content"
             type="textarea"
@@ -330,14 +345,22 @@
       </el-form>
       <div slot="footer">
         <el-button @click="showKnowledgeDialog = false">取消</el-button>
-        <el-button v-if="!isKnowledgeReadonly" type="primary" @click="saveKnowledge">
+        <el-button
+          v-if="!isKnowledgeReadonly"
+          type="primary"
+          @click="saveKnowledge"
+        >
           {{ knowledgeForm.docType === "folder" ? "保存目录" : "保存并索引" }}
         </el-button>
       </div>
     </el-dialog>
 
     <!-- 本地存储容量提示 -->
-    <el-dialog title="本地存储容量提示" :visible.sync="showStorageLimitDialog" width="520px">
+    <el-dialog
+      title="本地存储容量提示"
+      :visible.sync="showStorageLimitDialog"
+      width="520px"
+    >
       <div>
         当前 AI 历史对话仅保存在浏览器本地（localStorage）。
         <br />
@@ -348,7 +371,9 @@
       <div slot="footer">
         <el-button @click="exportLocalHistory">导出</el-button>
         <el-button type="warning" @click="resetLocalHistory">重置</el-button>
-        <el-button type="primary" @click="showStorageLimitDialog = false">我知道了</el-button>
+        <el-button type="primary" @click="showStorageLimitDialog = false"
+          >我知道了</el-button
+        >
       </div>
     </el-dialog>
   </div>
@@ -363,7 +388,6 @@ export default {
   data() {
     return {
       // 侧边栏
-      activeTab: "chat",
       conversationList: [],
       knowledgeList: [],
       currentConversationId: null,
@@ -376,14 +400,6 @@ export default {
       useRag: true,
       loadingMap: {},
       activeControllers: {},
-
-      // 用例生成
-      showCaseGenerate: false,
-      caseGenerateStep: 0,
-      caseRequirement: "",
-      apiList: [],
-      selectedApis: [],
-      generatedCase: "",
 
       // 知识库
       showKnowledgeDialog: false,
@@ -438,13 +454,17 @@ export default {
       this.mermaidRenderTimer = null;
     }
   },
+  activated() {
+    this.scheduleMermaidRender();
+  },
   methods: {
     openKnowledgeManage() {
       this.showKnowledgeManageDialog = true;
       this.loadKnowledgeList();
     },
     getCurrentProjectId() {
-      if (this.$store.state.projectId) return String(this.$store.state.projectId);
+      if (this.$store.state.projectId)
+        return String(this.$store.state.projectId);
       if (this.$store.state.userInfo && this.$store.state.userInfo.lastProject) {
         const lastProject = this.$store.state.userInfo.lastProject;
         if (typeof lastProject === "string" || typeof lastProject === "number") {
@@ -459,7 +479,10 @@ export default {
         try {
           const user = JSON.parse(rawUser);
           if (user && user.lastProject) {
-            if (typeof user.lastProject === "string" || typeof user.lastProject === "number") {
+            if (
+              typeof user.lastProject === "string" ||
+              typeof user.lastProject === "number"
+            ) {
               return String(user.lastProject);
             }
             if (typeof user.lastProject === "object" && user.lastProject.id) {
@@ -490,7 +513,9 @@ export default {
     },
 
     buildApiUrl(path) {
-      const base = (this.$axios && this.$axios.defaults && this.$axios.defaults.baseURL) || "";
+      const base =
+        (this.$axios && this.$axios.defaults && this.$axios.defaults.baseURL) ||
+        "";
       if (!base || base === "/") {
         return path;
       }
@@ -525,7 +550,9 @@ export default {
       }
       const token = localStorage.getItem("token") || "anonymous";
       const tokenTail = token.slice(-12);
-      return `ai_chat_history_v1:${projectId || "no_project"}:${userId || tokenTail}`;
+      return `ai_chat_history_v1:${projectId || "no_project"}:${
+        userId || tokenTail
+      }`;
     },
 
     estimateSizeBytes(text) {
@@ -665,7 +692,9 @@ export default {
     },
 
     isConversationLoading(conversationId) {
-      return !!this.loadingMap[conversationId] && !!this.activeControllers[conversationId];
+      return (
+        !!this.loadingMap[conversationId] && !!this.activeControllers[conversationId]
+      );
     },
 
     markConversationLoading(conversationId, loading) {
@@ -693,7 +722,10 @@ export default {
       if (!conversationId) return;
       const next = this.conversationList.map((c) => {
         if (c.id !== conversationId) return c;
-        const title = c.title && c.title !== "新会话" ? c.title : (messages[0]?.content || "新会话").slice(0, 20);
+        const title =
+          c.title && c.title !== "新会话"
+            ? c.title
+            : (messages[0]?.content || "新会话").slice(0, 20);
         return {
           ...c,
           title,
@@ -727,10 +759,16 @@ export default {
         this.createNewChat();
       }
       const sendingConversationId = this.currentConversationId;
-      if (!sendingConversationId || this.isConversationLoading(sendingConversationId)) return;
+      if (
+        !sendingConversationId ||
+        this.isConversationLoading(sendingConversationId)
+      )
+        return;
       const conversationIndex = this.getConversationIndex(sendingConversationId);
       if (conversationIndex < 0) return;
-      const baseMessages = Array.isArray(this.conversationList[conversationIndex].messages)
+      const baseMessages = Array.isArray(
+        this.conversationList[conversationIndex].messages
+      )
         ? [...this.conversationList[conversationIndex].messages]
         : [];
       const inputMsg = this.inputMessage;
@@ -838,10 +876,23 @@ export default {
                   this.scheduleMermaidRender();
                 }
               } else if (data.type === "case" && data.case) {
+                // 更新当前助手消息，附加 caseData
                 lastEventAt = Date.now();
-                this.generatedCase = JSON.stringify(data.case, null, 2);
-                this.caseGenerateStep = 2;
-                this.showCaseGenerate = true;
+                const currentMsg = sendingMessages[sendingMessages.length - 1];
+                currentMsg.caseData = data.case;
+                if (this.currentConversationId === sendingConversationId) {
+                  this.messages = sendingMessages;
+                  this.scrollToBottom();
+                }
+              } else if (data.type === "interfaces" && Array.isArray(data.interfaces)) {
+                // 更新当前助手消息，附加 interfaceData
+                lastEventAt = Date.now();
+                const currentMsg = sendingMessages[sendingMessages.length - 1];
+                currentMsg.interfaceData = data.interfaces;
+                if (this.currentConversationId === sendingConversationId) {
+                  this.messages = sendingMessages;
+                  this.scrollToBottom();
+                }
               } else if (data.type === "error") {
                 throw new Error(data.message || "AI服务错误");
               } else if (data.type === "end") {
@@ -1001,7 +1052,7 @@ export default {
     async renderMermaid() {
       await this.$nextTick();
       if (!this.$el) return;
-      const nodes = this.$el.querySelectorAll(".bubble .mermaid");
+      const nodes = this.$el.querySelectorAll(".assistant-markdown .mermaid");
       let index = 0;
       for (const node of nodes) {
         if (node.getAttribute("data-rendered") === "1") {
@@ -1012,7 +1063,9 @@ export default {
           continue;
         }
         try {
-          const chartId = `mmd_${Date.now()}_${index}_${Math.random().toString(16).slice(2)}`;
+          const chartId = `mmd_${Date.now()}_${index}_${Math.random()
+            .toString(16)
+            .slice(2)}`;
           const result = await mermaid.render(chartId, chartCode);
           node.innerHTML = result.svg;
         } catch (e) {
@@ -1129,7 +1182,9 @@ export default {
     async openViewKnowledge(kb) {
       const projectId = this.getCurrentProjectId();
       if (!projectId || !kb || !kb.id) return;
-      const res = await this.$get(`/autotest/ai/knowledge/${kb.id}?projectId=${projectId}`);
+      const res = await this.$get(
+        `/autotest/ai/knowledge/${kb.id}?projectId=${projectId}`
+      );
       const detail = this.getResponseData(res);
       if (!detail || typeof detail !== "object") {
         this.$message.error("获取文档详情失败");
@@ -1149,7 +1204,9 @@ export default {
     async openEditKnowledge(kb) {
       const projectId = this.getCurrentProjectId();
       if (!projectId || !kb || !kb.id) return;
-      const res = await this.$get(`/autotest/ai/knowledge/${kb.id}?projectId=${projectId}`);
+      const res = await this.$get(
+        `/autotest/ai/knowledge/${kb.id}?projectId=${projectId}`
+      );
       const detail = this.getResponseData(res);
       if (!detail || typeof detail !== "object") {
         this.$message.error("获取文档详情失败");
@@ -1168,7 +1225,13 @@ export default {
 
     closeKnowledgeDialog() {
       this.knowledgeDialogMode = "create";
-      this.knowledgeForm = { id: "", parentId: "0", name: "", docType: "manual", content: "" };
+      this.knowledgeForm = {
+        id: "",
+        parentId: "0",
+        name: "",
+        docType: "manual",
+        content: "",
+      };
     },
 
     async saveKnowledge() {
@@ -1182,7 +1245,10 @@ export default {
         this.$message.warning("文档名称不能为空");
         return;
       }
-      if (this.knowledgeForm.docType !== "folder" && !this.knowledgeForm.content) {
+      if (
+        this.knowledgeForm.docType !== "folder" &&
+        !this.knowledgeForm.content
+      ) {
         this.$message.warning("文档内容不能为空");
         return;
       }
@@ -1193,7 +1259,10 @@ export default {
         parentId: this.knowledgeForm.parentId || "0",
         name: this.knowledgeForm.name,
         docType: this.knowledgeForm.docType,
-        content: this.knowledgeForm.docType === "folder" ? "" : this.knowledgeForm.content,
+        content:
+          this.knowledgeForm.docType === "folder"
+            ? ""
+            : this.knowledgeForm.content,
         sourceType: "manual",
         updateUser: userId,
       });
@@ -1244,7 +1313,9 @@ export default {
     async reindexKnowledge(kb) {
       const projectId = this.getCurrentProjectId();
       if (!projectId || !kb || !kb.id) return;
-      await this.$post(`/autotest/ai/knowledge/index/${kb.id}?projectId=${projectId}`);
+      await this.$post(
+        `/autotest/ai/knowledge/index/${kb.id}?projectId=${projectId}`
+      );
       this.$message.success("索引提交成功");
       this.loadKnowledgeList();
     },
@@ -1252,62 +1323,34 @@ export default {
     async deleteKnowledge(kb) {
       const projectId = this.getCurrentProjectId();
       if (!projectId || !kb || !kb.id) return;
-      await this.$delete(`/autotest/ai/knowledge/${kb.id}?projectId=${projectId}`);
+      await this.$delete(
+        `/autotest/ai/knowledge/${kb.id}?projectId=${projectId}`
+      );
       this.$message.success("删除成功");
       this.loadKnowledgeList();
     },
 
-    // 用例生成步骤
-    async nextCaseStep() {
-      if (this.caseGenerateStep === 0) {
-        const projectId = this.getCurrentProjectId();
-        if (!projectId) {
-          this.$message.error("当前项目ID为空，请重新选择项目后重试");
-          return;
-        }
-        const res = await this.$get(`/autotest/ai/agent/api-list/${projectId}`);
-        const data = this.getResponseData(res);
-        this.apiList = Array.isArray(data) ? data : [];
-        this.caseGenerateStep = 1;
-      }
-    },
-
-    // 生成用例
-    async generateCase() {
-      const projectId = this.getCurrentProjectId();
-      if (!projectId) {
-        this.$message.error("当前项目ID为空，请重新选择项目后重试");
+    goToInterfaceCreate(interfaces) {
+      if (!interfaces || !Array.isArray(interfaces) || !interfaces.length) {
+        this.$message.warning("无待新增接口数据");
         return;
       }
+      const projectId = this.getCurrentProjectId();
+      const storageKey = `ai_interface_draft_v1:${projectId || "default"}`;
+      localStorage.setItem(storageKey, JSON.stringify(interfaces[0]));
+      this.$router.push({ path: "/caseCenter/interfaceManage/add" });
+    },
 
-      this.$message.info("正在生成用例，请稍候...");
-
-      const res = await this.$post("/autotest/ai/generate/case", {
-        projectId: projectId,
-        userRequirement: this.caseRequirement,
-        selectedApis: this.selectedApis,
-      });
-
-      const data = this.getResponseData(res);
-      if (data && data.case) {
-        this.generatedCase = JSON.stringify(data.case, null, 2);
-        this.caseGenerateStep = 2;
-      } else {
-        this.$message.error("用例生成失败");
+    goToCaseDraftEdit(caseData) {
+      if (!caseData || typeof caseData !== "object") {
+        this.$message.warning("暂无可编辑的用例草稿");
+        return;
       }
+      const projectId = this.getCurrentProjectId();
+      const storageKey = `ai_case_draft_v1:${projectId || "default"}`;
+      localStorage.setItem(storageKey, JSON.stringify(caseData));
+      this.$router.push({ path: "/caseCenter/caseManage/apiCase/add" });
     },
-
-    // 保存用例
-    async saveGeneratedCase() {
-      // TODO: 调用后端保存用例接口
-      this.$message.success("用例保存成功");
-      this.showCaseGenerate = false;
-      this.caseGenerateStep = 0;
-      this.caseRequirement = "";
-      this.selectedApis = [];
-      this.generatedCase = "";
-    },
-
   },
 };
 </script>
@@ -1332,19 +1375,13 @@ export default {
   border-bottom: 1px solid #e4e7ed;
 }
 
-.sidebar-tabs {
-  flex: 1;
-  overflow: hidden;
-}
-
-.sidebar-tabs >>> .el-tabs__content {
-  height: calc(100% - 55px);
-  overflow-y: auto;
-}
-
 .conversation-list,
 .knowledge-list {
   padding: 10px;
+}
+.conversation-list {
+  flex: 1;
+  overflow-y: auto;
 }
 
 .knowledge-entry {
@@ -1544,24 +1581,24 @@ export default {
   color: #fff;
 }
 
-.message.assistant .bubble {
-  background: #fff;
-  border: 1px solid #e4e7ed;
+.assistant-markdown {
+  line-height: 1.6;
+  word-break: break-word;
 }
 
-.message.assistant .bubble >>> h1,
-.message.assistant .bubble >>> h2,
-.message.assistant .bubble >>> h3,
-.message.assistant .bubble >>> h4 {
+.assistant-markdown >>> h1,
+.assistant-markdown >>> h2,
+.assistant-markdown >>> h3,
+.assistant-markdown >>> h4 {
   margin: 10px 0 6px;
   line-height: 1.4;
 }
 
-.message.assistant .bubble >>> p {
+.assistant-markdown >>> p {
   margin: 6px 0;
 }
 
-.message.assistant .bubble >>> pre {
+.assistant-markdown >>> pre {
   white-space: pre-wrap;
   word-break: break-word;
   background: #f5f7fa;
@@ -1570,17 +1607,17 @@ export default {
   overflow-x: auto;
 }
 
-.message.assistant .bubble >>> code {
+.assistant-markdown >>> code {
   font-family: Consolas, "Courier New", monospace;
 }
 
-.message.assistant .bubble >>> ul,
-.message.assistant .bubble >>> ol {
+.assistant-markdown >>> ul,
+.assistant-markdown >>> ol {
   padding-left: 20px;
   margin: 8px 0;
 }
 
-.message.assistant .bubble >>> .mermaid {
+.assistant-markdown >>> .mermaid {
   overflow-x: auto;
   max-width: 100%;
 }
@@ -1631,23 +1668,63 @@ export default {
   flex: 1;
 }
 
-.case-generate-content {
-  padding: 20px;
-}
-
-.case-preview {
-  background: #f5f7fa;
-  padding: 15px;
-  border-radius: 4px;
-  max-height: 300px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  font-size: 12px;
-}
-
 .empty-tip {
   text-align: center;
   color: #909399;
   padding: 20px;
+}
+
+/* AI Cards Styles */
+.ai-card {
+  margin-top: 10px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
+}
+
+.card-header {
+  padding: 10px 15px;
+  background: #f5f7fa;
+  border-bottom: 1px solid #e4e7ed;
+  font-weight: bold;
+  color: #303133;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.card-header.warning {
+  background: #fdf6ec;
+  color: #e6a23c;
+}
+
+.card-body {
+  padding: 15px;
+}
+
+.card-body p {
+  margin: 0 0 10px;
+  line-height: 1.5;
+  color: #606266;
+}
+
+.interface-list {
+  margin: 0 0 15px;
+  padding: 0;
+  list-style: none;
+}
+
+.interface-list li {
+  margin-bottom: 5px;
+  font-family: monospace;
+  font-size: 13px;
+  color: #606266;
+}
+
+.card-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 </style>

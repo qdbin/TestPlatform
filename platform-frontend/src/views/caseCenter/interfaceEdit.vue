@@ -165,6 +165,19 @@ export default {
                     raw: '',
                     file: []
                 }
+                const projectId = String(this.$store.state.projectId || "");
+                const storageKey = `ai_interface_draft_v1:${projectId || "default"}`;
+                const draft = localStorage.getItem(storageKey);
+                if (draft) {
+                    try {
+                        const parsed = JSON.parse(draft);
+                        this.apiForm.name = parsed.name || this.apiForm.name;
+                        this.apiForm.path = parsed.path || this.apiForm.path;
+                        this.apiForm.method = parsed.method || this.apiForm.method;
+                        this.apiForm.description = parsed.description || this.apiForm.description;
+                    } catch (e) {}
+                    localStorage.removeItem(storageKey);
+                }
             }else{  // 编辑接口
                 let url = '/autotest/api/detail/' + apiParam.apiId;
                 this.$get(url, response =>{
@@ -200,7 +213,6 @@ export default {
                 if (valid) {
                     this.apiForm.projectId = this.$store.state.projectId;
                     let url = '/autotest/api/save';
-										console.log(this.apiForm)
                     this.$post(url, this.apiForm, response =>{
                         this.$message.success("保存成功");
                         this.$router.push({path: '/caseCenter/interfaceManage'});

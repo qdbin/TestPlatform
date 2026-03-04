@@ -10,7 +10,12 @@ from datetime import datetime
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain.prompts import PromptTemplate
 from langchain.tools import Tool
-from json_repair import repair_json
+try:
+    from json_repair import repair_json
+except Exception:
+    def repair_json(text: str, return_objects: bool = False):
+        fixed = re.sub(r",\s*([}\]])", r"\1", text or "")
+        return fixed
 
 from app.services.llm_service import llm_service
 from app.services.rag_service import rag_service
@@ -87,14 +92,33 @@ def _case_prompt(
     )
 
 
+def _interface_prompt(user_requirement: str, project_id: str) -> str:
+    return (
+        "你是一个API设计助手，请根据用户测试需求生成候选接口定义。\n"
+        "输出必须是JSON对象，不要输出解释文字。\n"
+        "格式：{\"interfaces\":[{\"name\":\"\",\"path\":\"\",\"method\":\"GET|POST|PUT|DELETE\",\"description\":\"\"}]}\n"
+        f"项目ID：{project_id}\n"
+        f"用户需求：{user_requirement}\n"
+        "要求：\n"
+        "- path必须以/开头\n"
+        "- method只能是GET/POST/PUT/DELETE之一\n"
+        "- 至少输出1个接口，最多输出5个\n"
+    )
+
+
 def _normalize_case_api_step(
-    step: Dict[str, Any], fallback_api_id: str, index: int
+    step: Dict[str, Any],
+    fallback_api_id: str,
+    valid_api_ids: set,
+    api_meta_map: Dict[str, Dict[str, Any]],
+    index: int,
 ) -> Optional[Dict[str, Any]]:
     if not isinstance(step, dict):
         return None
     api_id = str(step.get("apiId") or fallback_api_id or "")
-    if not api_id:
+    if not api_id or (valid_api_ids and api_id not in valid_api_ids):
         return None
+    api_meta = api_meta_map.get(api_id, {})
     return {
         "id": str(step.get("id") or ""),
         "index": int(step.get("index") if isinstance(step.get("index"), int) else index),
@@ -108,6 +132,9 @@ def _normalize_case_api_step(
         "assertion": step.get("assertion") if isinstance(step.get("assertion"), list) else [],
         "relation": step.get("relation") if isinstance(step.get("relation"), list) else [],
         "controller": step.get("controller") if isinstance(step.get("controller"), list) else [],
+        "apiMethod": str(step.get("apiMethod") or api_meta.get("method") or ""),
+        "apiName": str(step.get("apiName") or api_meta.get("name") or ""),
+        "apiPath": str(step.get("apiPath") or api_meta.get("path") or ""),
     }
 
 
@@ -130,7 +157,7 @@ def _normalize_case_request(
     normalized["level"] = str(normalized.get("level") or "P1")
     normalized["moduleId"] = str(normalized.get("moduleId") or first_module_id or "default")
     normalized["moduleName"] = str(normalized.get("moduleName") or first_module_name or "AI生成模块")
-    normalized["projectId"] = str(normalized.get("projectId") or project_id)
+    normalized["projectId"] = str(project_id)
     normalized["type"] = "API"
     normalized["thirdParty"] = str(normalized.get("thirdParty") or "")
     normalized["description"] = str(normalized.get("description") or "AI自动生成API测试用例")
@@ -149,9 +176,21 @@ def _normalize_case_request(
     raw_steps = normalized.get("caseApis")
     if not isinstance(raw_steps, list):
         raw_steps = []
+    valid_api_ids = {
+        str(item.get("id"))
+        for item in api_details
+        if isinstance(item, dict) and item.get("id")
+    }
+    api_meta_map = {
+        str(item.get("id")): item
+        for item in api_details
+        if isinstance(item, dict) and item.get("id")
+    }
     normalized_steps: List[Dict[str, Any]] = []
     for idx, step in enumerate(raw_steps):
-        normalized_step = _normalize_case_api_step(step, first_api_id, idx)
+        normalized_step = _normalize_case_api_step(
+            step, first_api_id, valid_api_ids, api_meta_map, idx
+        )
         if normalized_step is not None:
             normalized_steps.append(normalized_step)
     if not normalized_steps and first_api_id:
@@ -164,6 +203,8 @@ def _normalize_case_request(
                     "assertion": [],
                 },
                 first_api_id,
+                valid_api_ids,
+                api_meta_map,
                 0,
             ),
             _normalize_case_api_step(
@@ -174,6 +215,8 @@ def _normalize_case_request(
                     "assertion": [],
                 },
                 first_api_id,
+                valid_api_ids,
+                api_meta_map,
                 1,
             ),
         ]
@@ -187,22 +230,73 @@ def _normalize_case_request(
 
 
 class AgentService:
+    def _generate_interface_candidates(
+        self, project_id: str, user_requirement: str
+    ) -> List[Dict[str, Any]]:
+        prompt = _interface_prompt(user_requirement, project_id)
+        content = llm_service.chat([{"role": "user", "content": prompt}])
+        parsed = _try_parse_json_object(content or "")
+        interfaces = parsed.get("interfaces") if isinstance(parsed, dict) else []
+        if not isinstance(interfaces, list):
+            return []
+        normalized = []
+        for item in interfaces[:5]:
+            if not isinstance(item, dict):
+                continue
+            method = str(item.get("method") or "GET").upper()
+            if method not in {"GET", "POST", "PUT", "DELETE"}:
+                method = "GET"
+            path = str(item.get("path") or "").strip()
+            if not path:
+                continue
+            if not path.startswith("/"):
+                path = f"/{path}"
+            normalized.append(
+                {
+                    "name": str(item.get("name") or "AI候选接口"),
+                    "path": path,
+                    "method": method,
+                    "description": str(item.get("description") or ""),
+                }
+            )
+        return normalized
+
     def _auto_select_api_ids(
         self, project_id: str, token: str, query: str, limit: int = 3
     ) -> List[str]:
         platform_client = get_platform_client(token)
         apis = platform_client.get_api_list(project_id) or []
         candidates: List[Dict[str, Any]] = []
+        
+        # 简单分词（按空格或常见标点）
+        keywords = [k for k in re.split(r"[\s,，.。;；]+", query) if k]
+        
         for api in apis:
             if not isinstance(api, dict):
                 continue
             name = str(api.get("name") or "")
             url = str(api.get("url") or api.get("path") or "")
+            desc = str(api.get("description") or "")
+            method = str(api.get("method") or "")
+            
             score = 0
-            for kw in ["登录", "鉴权", "认证", "token", "login", "auth"]:
-                if kw.lower() in name.lower() or kw.lower() in url.lower():
+            # 基础匹配
+            full_text = f"{name} {url} {desc} {method}".lower()
+            for kw in keywords:
+                if not kw: continue
+                kw_lower = kw.lower()
+                if kw_lower in full_text:
+                    score += 1
+                if kw_lower in name.lower(): # 名字匹配权重更高
                     score += 2
-            candidates.append({"id": api.get("id"), "score": score})
+            
+            # 如果查询包含特定方法
+            if "get" in query.lower() and method.lower() == "get": score += 1
+            if "post" in query.lower() and method.lower() == "post": score += 1
+            
+            if score > 0:
+                candidates.append({"id": api.get("id"), "score": score})
+                
         candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
         return [str(c.get("id")) for c in candidates if c.get("id")][:limit]
 
@@ -402,15 +496,20 @@ class AgentService:
             result = self.generate_case(project_id, token, msg, selected_apis=[])
             reply = "已根据你的描述生成用例草稿。"
             case_obj = None
+            interfaces = None
             if isinstance(result, dict):
                 if result.get("status") == "success":
                     case_obj = result.get("case")
+                if result.get("status") == "needs_api_create":
+                    interfaces = result.get("interfaces")
                 if isinstance(result.get("message"), str) and result.get("message"):
                     reply = result.get("message")
             for ch in reply:
                 yield {"type": "content", "delta": ch}
             if case_obj is not None:
                 yield {"type": "case", "case": case_obj}
+            if interfaces:
+                yield {"type": "interfaces", "interfaces": interfaces}
             return
         knowledge: List[Dict[str, Any]] = []
         if use_rag:
@@ -467,9 +566,19 @@ class AgentService:
         user_requirement: str,
         selected_apis: Optional[List[str]] = None,
     ):
-        selected_apis = selected_apis or []
+        selected_apis = [str(api_id) for api_id in (selected_apis or []) if api_id]
         platform_client = get_platform_client(token)
         api_details: List[Dict[str, Any]] = []
+        all_apis = platform_client.get_api_list(project_id) or []
+        existing_api_ids = {
+            str(item.get("id"))
+            for item in all_apis
+            if isinstance(item, dict) and item.get("id")
+        }
+        missing_selected_api_ids = [
+            api_id for api_id in selected_apis if api_id not in existing_api_ids
+        ]
+        selected_apis = [api_id for api_id in selected_apis if api_id in existing_api_ids]
 
         if not selected_apis:
             selected_apis = self._auto_select_api_ids(
@@ -480,6 +589,15 @@ class AgentService:
             api = platform_client.get_api_detail(api_id)
             if api:
                 api_details.append(api)
+        if not api_details:
+            return {
+                "status": "needs_api_create",
+                "message": "当前项目未匹配到可用接口，请先保存接口后再生成用例",
+                "missing_api_ids": missing_selected_api_ids,
+                "interfaces": self._generate_interface_candidates(
+                    project_id, user_requirement
+                ),
+            }
         knowledge: List[Dict[str, Any]] = rag_service.search(
             project_id, user_requirement, top_k=5
         )
@@ -488,7 +606,12 @@ class AgentService:
         parsed = _try_parse_json_object(content)
         normalized = _normalize_case_request(parsed or {}, project_id, api_details)
         if normalized:
-            return {"status": "success", "case": normalized}
+            return {
+                "status": "success",
+                "case": normalized,
+                "existing_api_ids": [str(item.get("id")) for item in api_details if item.get("id")],
+                "missing_api_ids": missing_selected_api_ids,
+            }
         return {
             "status": "error",
             "message": "无法解析用例JSON",

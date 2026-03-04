@@ -6,7 +6,7 @@
 .idea/
 .trae/
 .vscode/
-target/
+**/target/
 
 
 *.iws
