@@ -95,7 +95,7 @@
             class="message"
             :class="msg.role"
           >
-            <div class="avatar">
+            <div v-if="msg.role === 'user'" class="avatar">
               <i
                 :class="msg.role === 'user' ? 'el-icon-user' : 'el-icon-cpu'"
               ></i>
@@ -128,6 +128,9 @@
                         msg.caseData.name
                       }}</strong>
                     </p>
+                    <p v-if="Array.isArray(msg.apiIds) && msg.apiIds.length">
+                      关联接口ID：{{ msg.apiIds.join(", ") }}
+                    </p>
                     <div class="card-actions">
                       <el-button
                         type="primary"
@@ -135,6 +138,13 @@
                         @click="goToCaseDraftEdit(msg.caseData)"
                       >
                         编辑并保存用例
+                      </el-button>
+                      <el-button
+                        v-if="Array.isArray(msg.apiIds) && msg.apiIds.length"
+                        size="small"
+                        @click="openApiEditorById(msg.apiIds[0])"
+                      >
+                        编辑首个接口
                       </el-button>
                     </div>
                   </div>
@@ -147,6 +157,9 @@
                   </div>
                   <div class="card-body">
                     <p>当前项目未找到匹配的接口。已为你生成接口定义草稿：</p>
+                    <p v-if="Array.isArray(msg.apiIds) && msg.apiIds.length">
+                      已自动保存接口ID：{{ msg.apiIds.join(", ") }}
+                    </p>
                     <ul class="interface-list">
                       <li v-for="(item, idx) in msg.interfaceData" :key="idx">
                         <el-tag size="mini">{{ item.method }}</el-tag>
@@ -160,6 +173,13 @@
                         @click="goToInterfaceCreate(msg.interfaceData)"
                       >
                         创建接口
+                      </el-button>
+                      <el-button
+                        v-if="Array.isArray(msg.apiIds) && msg.apiIds.length"
+                        size="small"
+                        @click="openApiEditorById(msg.apiIds[0])"
+                      >
+                        编辑已保存接口
                       </el-button>
                     </div>
                   </div>
@@ -376,6 +396,15 @@
         >
       </div>
     </el-dialog>
+
+    <el-dialog
+      title="Mermaid 预览"
+      :visible.sync="showMermaidPreviewDialog"
+      width="80%"
+      append-to-body
+    >
+      <div class="mermaid-preview" v-html="mermaidPreviewSvg"></div>
+    </el-dialog>
   </div>
 </template>
 
@@ -416,15 +445,14 @@ export default {
       },
       markdownIt: null,
       mermaidRenderTimer: null,
+      showMermaidPreviewDialog: false,
+      mermaidPreviewSvg: "",
     };
   },
   computed: {
     currentConversationLoading() {
       if (!this.currentConversationId) return false;
-      return (
-        !!this.loadingMap[this.currentConversationId] &&
-        !!this.activeControllers[this.currentConversationId]
-      );
+      return !!this.loadingMap[this.currentConversationId];
     },
     isKnowledgeReadonly() {
       return this.knowledgeDialogMode === "view";
@@ -456,6 +484,11 @@ export default {
   },
   activated() {
     this.scheduleMermaidRender();
+  },
+  deactivated() {
+    Object.keys(this.activeControllers).forEach((id) => {
+      this.abortConversationRequest(id);
+    });
   },
   methods: {
     openKnowledgeManage() {
@@ -740,6 +773,22 @@ export default {
       }
     },
 
+    buildHistoryMessages(messages) {
+      if (!Array.isArray(messages)) return [];
+      return messages
+        .filter(
+          (item) =>
+            item &&
+            (item.role === "user" || item.role === "assistant") &&
+            item.content
+        )
+        .slice(-20)
+        .map((item) => ({
+          role: item.role,
+          content: item.content,
+        }));
+    },
+
     async sendMessage() {
       if (!this.inputMessage.trim()) return;
 
@@ -807,6 +856,7 @@ export default {
               message: inputMsg,
               useRag: this.useRag,
               conversationId: sendingConversationId,
+              historyMessages: this.buildHistoryMessages(baseMessages),
             }),
           }
         );
@@ -825,7 +875,7 @@ export default {
           Promise.race([
             reader.read(),
             new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("流式响应超时，请重试")), 12000)
+              setTimeout(() => reject(new Error("流式响应超时，请重试")), 30000)
             ),
           ]);
 
@@ -880,6 +930,15 @@ export default {
                 lastEventAt = Date.now();
                 const currentMsg = sendingMessages[sendingMessages.length - 1];
                 currentMsg.caseData = data.case;
+                const apiIds = []
+                  .concat(Array.isArray(data.api_ids) ? data.api_ids : [])
+                  .concat(
+                    Array.isArray(data.created_api_ids)
+                      ? data.created_api_ids
+                      : []
+                  )
+                  .filter(Boolean);
+                currentMsg.apiIds = Array.from(new Set(apiIds));
                 if (this.currentConversationId === sendingConversationId) {
                   this.messages = sendingMessages;
                   this.scrollToBottom();
@@ -889,6 +948,9 @@ export default {
                 lastEventAt = Date.now();
                 const currentMsg = sendingMessages[sendingMessages.length - 1];
                 currentMsg.interfaceData = data.interfaces;
+                currentMsg.apiIds = Array.isArray(data.api_ids)
+                  ? data.api_ids
+                  : [];
                 if (this.currentConversationId === sendingConversationId) {
                   this.messages = sendingMessages;
                   this.scrollToBottom();
@@ -1068,6 +1130,11 @@ export default {
             .slice(2)}`;
           const result = await mermaid.render(chartId, chartCode);
           node.innerHTML = result.svg;
+          node.classList.add("clickable-mermaid");
+          node.addEventListener("click", () => {
+            this.mermaidPreviewSvg = result.svg;
+            this.showMermaidPreviewDialog = true;
+          });
         } catch (e) {
           node.innerHTML = `<pre>${this.escapeHtml(chartCode)}</pre>`;
         }
@@ -1275,10 +1342,15 @@ export default {
         this.knowledgeForm.docType !== "folder"
       ) {
         try {
-          await this.$post(
+          const indexRes = await this.$post(
             `/autotest/ai/knowledge/index/${knowledgeId}?projectId=${projectId}`
           );
-          this.$message.success("保存成功，索引已提交");
+          const indexData = this.getResponseData(indexRes) || {};
+          if (indexData && indexData.indexedStatus === "degraded") {
+            this.$message.warning("保存成功，但索引降级失败，请检查Embedding配置");
+          } else {
+            this.$message.success("保存成功，索引已完成");
+          }
         } catch (e) {
           this.$message.warning("保存成功，但索引提交失败");
         }
@@ -1293,12 +1365,14 @@ export default {
     knowledgeStatusType(status) {
       if (status === "ready") return "success";
       if (status === "error") return "danger";
+      if (status === "degraded") return "warning";
       return "warning";
     },
 
     knowledgeStatusText(status) {
       if (status === "ready") return "已索引";
       if (status === "error") return "索引失败";
+      if (status === "degraded") return "索引降级";
       return "待索引";
     },
 
@@ -1339,6 +1413,14 @@ export default {
       const storageKey = `ai_interface_draft_v1:${projectId || "default"}`;
       localStorage.setItem(storageKey, JSON.stringify(interfaces[0]));
       this.$router.push({ path: "/caseCenter/interfaceManage/add" });
+    },
+
+    openApiEditorById(apiId) {
+      if (!apiId) {
+        this.$message.warning("暂无可编辑的接口ID");
+        return;
+      }
+      this.$router.push({ path: `/caseCenter/interfaceManage/edit/${apiId}` });
     },
 
     goToCaseDraftEdit(caseData) {
@@ -1565,6 +1647,11 @@ export default {
   margin: 0 10px;
 }
 
+.message.assistant .content {
+  max-width: 86%;
+  margin-left: 0;
+}
+
 .message.user .content {
   text-align: right;
 }
@@ -1620,6 +1707,13 @@ export default {
 .assistant-markdown >>> .mermaid {
   overflow-x: auto;
   max-width: 100%;
+  cursor: zoom-in;
+}
+
+.assistant-markdown >>> .clickable-mermaid {
+  border: 1px dashed #dcdfe6;
+  border-radius: 8px;
+  padding: 8px;
 }
 
 .message .time {
@@ -1726,5 +1820,15 @@ export default {
 .card-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
+}
+
+.mermaid-preview {
+  width: 100%;
+  overflow: auto;
+}
+
+.mermaid-preview >>> svg {
+  max-width: 100%;
 }
 </style>

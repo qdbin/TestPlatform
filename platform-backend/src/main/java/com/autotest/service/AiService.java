@@ -121,15 +121,12 @@ public class AiService {
                 throw new LMException("该目录下还有子节点，无法删除");
             }
         }
-        aiKnowledgeMapper.deleteKnowledge(knowledgeId);
-        try {
-            String targetProjectId = projectId;
-            if (knowledge != null && knowledge.getProjectId() != null && !knowledge.getProjectId().isEmpty()) {
-                targetProjectId = knowledge.getProjectId();
-            }
-            deleteFromAiService("/ai/knowledge/index/" + knowledgeId + "?project_id=" + targetProjectId);
-        } catch (Exception ignored) {
+        String targetProjectId = projectId;
+        if (knowledge != null && knowledge.getProjectId() != null && !knowledge.getProjectId().isEmpty()) {
+            targetProjectId = knowledge.getProjectId();
         }
+        deleteFromAiService("/ai/knowledge/index/" + knowledgeId + "?project_id=" + targetProjectId);
+        aiKnowledgeMapper.deleteKnowledge(knowledgeId);
     }
 
     /**
@@ -149,7 +146,7 @@ public class AiService {
     /**
      * 五、触发知识库索引
      */
-    public void indexKnowledge(String knowledgeId) {
+    public String indexKnowledge(String knowledgeId) {
         AiKnowledge knowledge = aiKnowledgeMapper.getKnowledgeById(knowledgeId);
         if (knowledge == null) {
             throw new LMException("知识库文档不存在");
@@ -164,7 +161,9 @@ public class AiService {
             params.put("project_id", knowledge.getProjectId());
             params.put("content", knowledge.getContent());
             params.put("name", knowledge.getName());
-            postToAiService("/ai/knowledge/index", params, null, Map.class);
+            Map<String, Object> indexResult = postToAiService("/ai/knowledge/index", params, null, Map.class);
+            boolean indexed = indexResult != null && Boolean.TRUE.equals(indexResult.get("indexed"));
+            boolean degraded = indexResult != null && Boolean.TRUE.equals(indexResult.get("degraded"));
 
             AiKnowledge update = new AiKnowledge();
             update.setId(knowledge.getId());
@@ -173,10 +172,21 @@ public class AiService {
             update.setContent(knowledge.getContent());
             update.setDocType(knowledge.getDocType());
             update.setSourceType(knowledge.getSourceType());
-            update.setStatus("indexed");
+            if (indexed) {
+                update.setStatus("indexed");
+            } else if (degraded) {
+                update.setStatus("degraded");
+            } else {
+                update.setStatus("error");
+            }
             update.setUpdateTime(System.currentTimeMillis());
             update.setUpdateUser(knowledge.getUpdateUser());
             aiKnowledgeMapper.updateKnowledge(update);
+            if (!indexed) {
+                String error = indexResult == null ? "未知错误" : String.valueOf(indexResult.getOrDefault("error", "索引失败"));
+                throw new LMException("知识库索引失败: " + error);
+            }
+            return update.getStatus();
         } catch (Exception e) {
             AiKnowledge update = new AiKnowledge();
             update.setId(knowledge.getId());

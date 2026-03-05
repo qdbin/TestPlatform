@@ -86,6 +86,44 @@ class PlatformClient:
             print(f"获取接口详情失败: {e}")
             return None
 
+    def save_api(self, project_id: str, api_data: Dict[str, Any]) -> Optional[str]:
+        try:
+            payload = {
+                "id": "",
+                "name": str(api_data.get("name") or "AI生成接口"),
+                "level": str(api_data.get("level") or "P1"),
+                "moduleId": str(api_data.get("moduleId") or "0"),
+                "projectId": str(project_id),
+                "method": str(api_data.get("method") or "GET").upper(),
+                "path": str(api_data.get("path") or "/"),
+                "protocol": str(api_data.get("protocol") or "http"),
+                "domainSign": str(api_data.get("domainSign") or ""),
+                "description": str(api_data.get("description") or ""),
+                "header": api_data.get("header") if isinstance(api_data.get("header"), list) else [],
+                "body": api_data.get("body") if isinstance(api_data.get("body"), dict) else {"type": "json", "form": [], "json": "", "raw": "", "file": []},
+                "query": api_data.get("query") if isinstance(api_data.get("query"), list) else [],
+                "rest": api_data.get("rest") if isinstance(api_data.get("rest"), list) else [],
+            }
+            with httpx.Client(timeout=self.timeout) as client:
+                response = client.post(
+                    f"{self.base_url}/autotest/api/save",
+                    json=payload,
+                    headers=self._get_headers(),
+                )
+                if response.status_code == 200:
+                    if response.text:
+                        try:
+                            body = response.json()
+                            if isinstance(body, dict):
+                                return str(body.get("data") or body.get("id") or "")
+                        except Exception:
+                            return str(response.text).strip('"')
+                    return None
+                return None
+        except Exception as e:
+            print(f"保存接口失败: {e}")
+            return None
+
     def get_environment_list(self, project_id: str) -> List[Dict[str, Any]]:
         """
         获取项目环境列表

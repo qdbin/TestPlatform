@@ -57,10 +57,26 @@ class FakeCollection:
     def count(self):
         return len(self.ids)
 
-    def get(self):
-        return {"ids": self.ids, "metadatas": self.metadatas}
+    def get(self, where=None):
+        if not where:
+            return {"ids": self.ids, "metadatas": self.metadatas}
+        knowledge_id = str(where.get("knowledge_id")) if isinstance(where, dict) else ""
+        matched = [
+            (id_val, meta)
+            for id_val, meta in zip(self.ids, self.metadatas)
+            if isinstance(meta, dict) and str(meta.get("knowledge_id")) == knowledge_id
+        ]
+        return {"ids": [x[0] for x in matched], "metadatas": [x[1] for x in matched]}
 
-    def delete(self, ids):
+    def delete(self, ids=None, where=None):
+        if ids is None and where is not None:
+            knowledge_id = str(where.get("knowledge_id")) if isinstance(where, dict) else ""
+            ids = [
+                id_val
+                for id_val, meta in zip(self.ids, self.metadatas)
+                if isinstance(meta, dict) and str(meta.get("knowledge_id")) == knowledge_id
+            ]
+        ids = ids or []
         remain = [
             (d, i, m, e)
             for d, i, m, e in zip(self.docs, self.ids, self.metadatas, self.embeddings)
@@ -180,6 +196,19 @@ def test_rag_fallback_search_when_embedding_unavailable(monkeypatch):
     assert len(results) >= 1
 
 
+def test_rag_delete_knowledge(monkeypatch):
+    from app.services.rag_service import rag_service
+
+    rag_service._embeddings = DummyEmbeddings()
+    rag_service._client = FakeClient()
+    rag_service._fallback_docs = {}
+    rag_service.add_documents("p_del", "k_del", ["删除前文档"])
+    delete_result = rag_service.delete_knowledge("p_del", "k_del")
+    assert delete_result.get("status") == "success"
+    results = rag_service.search("p_del", "删除前文档", top_k=5)
+    assert results == []
+
+
 def test_platform_client_headers():
     from app.tools.platform_tools import get_platform_client
 
@@ -210,7 +239,7 @@ def test_chat_api_uses_agent(monkeypatch, client: TestClient):
 def test_chat_stream_sse_format(monkeypatch, client: TestClient):
     from app.services import agent_service as agent_service_module
 
-    def fake_stream_chat(project_id: str, token: str, message: str, use_rag: bool):
+    def fake_stream_chat(project_id: str, token: str, message: str, use_rag: bool, conversation_id: str = "", history_messages=None):
         yield {"type": "content", "delta": "O"}
         yield {"type": "content", "delta": "K"}
         yield {"type": "case", "case": {"name": "demo"}}
@@ -300,6 +329,9 @@ def test_generate_case_needs_api_create(monkeypatch):
 
         def get_api_detail(self, api_id: str):
             return None
+        
+        def save_api(self, project_id: str, api_data):
+            return None
 
     monkeypatch.setattr(agent_service_module, "get_platform_client", lambda token: EmptyPlatformClient())
     monkeypatch.setattr(
@@ -316,4 +348,54 @@ def test_generate_case_needs_api_create(monkeypatch):
     assert result.get("status") == "needs_api_create"
     assert isinstance(result.get("interfaces"), list)
     assert result["interfaces"][0]["path"] == "/login"
+
+
+def test_generate_case_auto_create_api(monkeypatch):
+    from app.services import agent_service as agent_service_module
+    from app.services.agent_service import agent_service
+    from app.services import llm_service as llm_service_module
+    from app.services import rag_service as rag_service_module
+
+    class AutoCreateClient:
+        def __init__(self):
+            self.saved_ids = ["api_created_1"]
+
+        def get_api_list(self, project_id: str):
+            return []
+
+        def get_api_detail(self, api_id: str):
+            if api_id == "api_created_1":
+                return {
+                    "id": "api_created_1",
+                    "name": "注册接口",
+                    "path": "/register",
+                    "method": "POST",
+                    "moduleId": "0",
+                    "moduleName": "默认模块",
+                }
+            return None
+
+        def save_api(self, project_id: str, api_data):
+            return "api_created_1"
+
+    monkeypatch.setattr(agent_service_module, "get_platform_client", lambda token: AutoCreateClient())
+    monkeypatch.setattr(
+        agent_service,
+        "_generate_interface_candidates",
+        lambda project_id, requirement: [{"name": "注册接口", "path": "/register", "method": "POST", "description": ""}],
+    )
+    monkeypatch.setattr(rag_service_module.rag_service, "search", lambda project_id, query, top_k=5: [])
+    monkeypatch.setattr(
+        llm_service_module.llm_service,
+        "chat",
+        lambda messages: '{"name":"注册流程用例","type":"API","caseApis":[{"apiId":"api_created_1","description":"步骤1"}]}',
+    )
+    result = agent_service.generate_case(
+        project_id="p3",
+        token="tok",
+        user_requirement="基于注册接口生成用例",
+        selected_apis=[],
+    )
+    assert result.get("status") == "success"
+    assert "api_created_1" in result.get("created_api_ids", [])
 

@@ -139,6 +139,8 @@ public class AiController {
                 item.put("indexedStatus", "ready");
             } else if ("error".equals(k.getStatus())) {
                 item.put("indexedStatus", "error");
+            } else if ("degraded".equals(k.getStatus())) {
+                item.put("indexedStatus", "degraded");
             } else {
                 item.put("indexedStatus", "pending");
             }
@@ -241,9 +243,10 @@ public class AiController {
         if (!canManageKnowledgeItem(httpServletRequest, existed)) {
             throw new LMException("无权限操作知识库");
         }
-        aiService.indexKnowledge(id);
+        String indexedStatus = aiService.indexKnowledge(id);
         Map<String, Object> result = new HashMap<>();
-        result.put("msg", "索引任务已提交");
+        result.put("msg", "索引完成");
+        result.put("indexedStatus", "indexed".equals(indexedStatus) ? "ready" : indexedStatus);
         return result;
     }
 
@@ -271,6 +274,7 @@ public class AiController {
                 aiRequest.put("message", message);
                 aiRequest.put("use_rag", useRag);
                 aiRequest.put("conversation_id", conversationId != null ? conversationId : "");
+                aiRequest.put("history_messages", request.get("historyMessages"));
                 aiService.streamChat(aiRequest, token, emitter);
             } catch (Exception e) {
                 emitter.complete();

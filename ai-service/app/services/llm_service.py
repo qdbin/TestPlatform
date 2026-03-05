@@ -21,30 +21,32 @@ class LLMService:
         self._llm = None
         self._provider = config.llm_provider.lower()
 
+    def _create_llm(self, streaming: bool):
+        if self._provider == "deepseek" or self._provider == "openai":
+            return ChatOpenAI(
+                model=config.llm_model,
+                openai_api_key=config.llm_api_key,
+                base_url=config.llm_base_url,
+                temperature=config.llm_temperature,
+                max_tokens=config.llm_max_tokens,
+                streaming=streaming,
+            )
+        if self._provider == "qwen":
+            return ChatOpenAI(
+                model=config.llm_model,
+                openai_api_key=config.llm_api_key,
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                temperature=config.llm_temperature,
+                max_tokens=config.llm_max_tokens,
+                streaming=streaming,
+            )
+        raise ValueError(f"Unknown LLM provider: {self._provider}")
+
     def _get_llm(self):
         """延迟获取LLM"""
         if self._llm is None:
             try:
-                if self._provider == "deepseek" or self._provider == "openai":
-                    self._llm = ChatOpenAI(
-                        model=config.llm_model,
-                        openai_api_key=config.llm_api_key,
-                        base_url=config.llm_base_url,
-                        temperature=config.llm_temperature,
-                        max_tokens=config.llm_max_tokens,
-                        streaming=False,
-                    )
-                elif self._provider == "qwen":
-                    self._llm = ChatOpenAI(
-                        model=config.llm_model,
-                        openai_api_key=config.llm_api_key,
-                        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-                        temperature=config.llm_temperature,
-                        max_tokens=config.llm_max_tokens,
-                        streaming=False,
-                    )
-                else:
-                    raise ValueError(f"Unknown LLM provider: {self._provider}")
+                self._llm = self._create_llm(False)
             except Exception as e:
                 print(f"LLM初始化失败: {e}")
                 return None
@@ -81,11 +83,10 @@ class LLMService:
         self, messages: List[Dict[str, str]], system_prompt: Optional[str] = None
     ):
         """流式对话生成"""
-        llm = self._get_llm()
-        if llm is None:
+        try:
+            llm = self._create_llm(True)
+        except Exception:
             return iter([])
-
-        llm.streaming = True
 
         langchain_messages = []
 
@@ -100,6 +101,8 @@ class LLMService:
                 langchain_messages.append(HumanMessage(content=content))
             elif role == "assistant":
                 langchain_messages.append(AIMessage(content=content))
+            elif role == "system":
+                langchain_messages.append(SystemMessage(content=content))
 
         return llm.stream(langchain_messages)
 

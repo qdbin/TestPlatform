@@ -229,6 +229,25 @@ def _normalize_case_request(
     return normalized
 
 
+def _normalize_history_messages(
+    history_messages: Optional[List[Dict[str, Any]]]
+) -> List[Dict[str, str]]:
+    if not isinstance(history_messages, list):
+        return []
+    normalized: List[Dict[str, str]] = []
+    for item in history_messages:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        normalized.append({"role": role, "content": content})
+    return normalized[-20:]
+
+
 class AgentService:
     def _generate_interface_candidates(
         self, project_id: str, user_requirement: str
@@ -298,7 +317,11 @@ class AgentService:
                 candidates.append({"id": api.get("id"), "score": score})
                 
         candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
-        return [str(c.get("id")) for c in candidates if c.get("id")][:limit]
+        picked = [str(c.get("id")) for c in candidates if c.get("id")][:limit]
+        if picked:
+            return picked
+        fallback = [str(item.get("id")) for item in apis if isinstance(item, dict) and item.get("id")]
+        return fallback[:limit]
 
     def _fallback_chat(
         self, project_id: str, token: str, message: str, use_rag: bool
@@ -487,39 +510,83 @@ class AgentService:
             return {"reply": f"AI服务调用失败：{str(e)}"}
 
     def stream_chat(
-        self, project_id: str, token: str, message: str, use_rag: bool
+        self,
+        project_id: str,
+        token: str,
+        message: str,
+        use_rag: bool,
+        conversation_id: str = "",
+        history_messages: Optional[List[Dict[str, Any]]] = None,
     ):
         msg = (message or "").strip()
         if not msg:
             return
-        if any(k in msg for k in ["用例", "case", "测试点", "测试用例", "生成"]):
-            result = self.generate_case(project_id, token, msg, selected_apis=[])
+        
+        # 检测是否为用例生成请求
+        is_case_request = any(k in msg for k in ["用例", "case", "测试点", "测试用例", "生成"])
+        
+        if is_case_request:
+            # 先查询后端已有的接口
+            platform_client = get_platform_client(token)
+            all_apis = platform_client.get_api_list(project_id) or []
+            
+            # 根据用户需求智能匹配接口
+            matched_api_ids = self._auto_select_api_ids(project_id, token, msg, limit=5)
+            
+            # 如果有匹配的接口，直接生成用例
+            if matched_api_ids:
+                result = self.generate_case(project_id, token, msg, selected_apis=matched_api_ids)
+            else:
+                # 没有匹配的接口，生成接口候选
+                result = self.generate_case(project_id, token, msg, selected_apis=[])
+            
             reply = "已根据你的描述生成用例草稿。"
             case_obj = None
             interfaces = None
+            
             if isinstance(result, dict):
                 if result.get("status") == "success":
                     case_obj = result.get("case")
+                    if result.get("created_api_ids"):
+                        reply = f"已为你创建{len(result.get('created_api_ids', []))}个接口并生成用例草稿。"
+                    elif result.get("existing_api_ids"):
+                        reply = f"已基于{len(result.get('existing_api_ids', []))}个现有接口生成用例草稿。"
                 if result.get("status") == "needs_api_create":
                     interfaces = result.get("interfaces")
+                    reply = "当前项目未找到匹配的接口，已为你生成接口候选。"
                 if isinstance(result.get("message"), str) and result.get("message"):
                     reply = result.get("message")
+            
+            # 流式输出回复
             for ch in reply:
                 yield {"type": "content", "delta": ch}
+            
+            # 返回用例数据
             if case_obj is not None:
-                yield {"type": "case", "case": case_obj}
+                yield {
+                    "type": "case",
+                    "case": case_obj,
+                    "api_ids": result.get("existing_api_ids", []),
+                    "created_api_ids": result.get("created_api_ids", []),
+                }
             if interfaces:
-                yield {"type": "interfaces", "interfaces": interfaces}
+                yield {
+                    "type": "interfaces",
+                    "interfaces": interfaces,
+                    "api_ids": result.get("created_api_ids", []),
+                }
             return
+        
+        # 普通对话处理
         knowledge: List[Dict[str, Any]] = []
         if use_rag:
             knowledge = rag_service.search(project_id, msg, top_k=5)
         context = "\n\n".join([str(d.get("content") or "") for d in knowledge if d])
-        prompt = msg
-        if context:
-            prompt = f"参考资料：\n{context}\n\n用户问题：{msg}\n\n请结合参考资料回答。"
+        prompt = msg if not context else f"参考资料：\n{context}\n\n用户问题：{msg}\n\n请结合参考资料回答。"
+        chat_messages = _normalize_history_messages(history_messages)
+        chat_messages.append({"role": "user", "content": prompt})
         chunks = llm_service.chat_with_stream(
-            [{"role": "user", "content": prompt}], system_prompt=ASSISTANT_ROLE_PROMPT
+            chat_messages, system_prompt=ASSISTANT_ROLE_PROMPT
         )
         has_content = False
         for chunk in chunks:
@@ -548,7 +615,7 @@ class AgentService:
                     yield {"type": "content", "delta": delta}
         if not has_content:
             fallback = llm_service.chat(
-                [{"role": "user", "content": prompt}], system_prompt=ASSISTANT_ROLE_PROMPT
+                chat_messages, system_prompt=ASSISTANT_ROLE_PROMPT
             )
             if fallback:
                 yield {"type": "content", "delta": fallback}
@@ -569,6 +636,7 @@ class AgentService:
         selected_apis = [str(api_id) for api_id in (selected_apis or []) if api_id]
         platform_client = get_platform_client(token)
         api_details: List[Dict[str, Any]] = []
+        created_api_ids: List[str] = []
         all_apis = platform_client.get_api_list(project_id) or []
         existing_api_ids = {
             str(item.get("id"))
@@ -590,13 +658,22 @@ class AgentService:
             if api:
                 api_details.append(api)
         if not api_details:
+            interfaces = self._generate_interface_candidates(project_id, user_requirement)
+            for interface_data in interfaces:
+                created_api_id = platform_client.save_api(project_id, interface_data)
+                if created_api_id:
+                    created_api_ids.append(str(created_api_id))
+            for api_id in created_api_ids[:5]:
+                api = platform_client.get_api_detail(api_id)
+                if api:
+                    api_details.append(api)
+        if not api_details:
             return {
                 "status": "needs_api_create",
                 "message": "当前项目未匹配到可用接口，请先保存接口后再生成用例",
                 "missing_api_ids": missing_selected_api_ids,
-                "interfaces": self._generate_interface_candidates(
-                    project_id, user_requirement
-                ),
+                "interfaces": interfaces if isinstance(interfaces, list) else [],
+                "created_api_ids": created_api_ids,
             }
         knowledge: List[Dict[str, Any]] = rag_service.search(
             project_id, user_requirement, top_k=5
@@ -610,6 +687,7 @@ class AgentService:
                 "status": "success",
                 "case": normalized,
                 "existing_api_ids": [str(item.get("id")) for item in api_details if item.get("id")],
+                "created_api_ids": created_api_ids,
                 "missing_api_ids": missing_selected_api_ids,
             }
         return {

@@ -21,6 +21,7 @@ class ChatRequest(BaseModel):
     message: str
     use_rag: bool = True
     conversation_id: Optional[str] = None
+    history_messages: Optional[List[Dict[str, Any]]] = None
 
 
 class ChatResponse(BaseModel):
@@ -79,6 +80,8 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
                 token=token,
                 message=request.message,
                 use_rag=request.use_rag,
+                conversation_id=request.conversation_id or "",
+                history_messages=request.history_messages or [],
             ):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 

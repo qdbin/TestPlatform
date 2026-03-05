@@ -9,15 +9,95 @@ import json
 import re
 import chromadb
 from chromadb.config import Settings
-from langchain_community.embeddings import HuggingFaceEmbeddings
+import httpx
 from app.config import config
+
+
+class OpenAIEmbeddingFunction:
+    """使用OpenAI兼容API的Embedding函数（支持OpenAI、Ollama等）"""
+    
+    def __init__(self, api_key: str = "", base_url: str = "https://api.openai.com/v1", model: str = "text-embedding-3-small"):
+        self.api_key = api_key
+        self.base_url = base_url.rstrip('/')
+        self.model = model
+    
+    def __call__(self, input: List[str]) -> List[List[float]]:
+        """生成文档向量"""
+        embeddings = []
+        for text in input:
+            try:
+                headers = {"Content-Type": "application/json"}
+                if self.api_key:
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+                
+                response = httpx.post(
+                    f"{self.base_url}/embeddings",
+                    headers=headers,
+                    json={"model": self.model, "input": text},
+                    timeout=60.0
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    embedding = data.get("data", [{}])[0].get("embedding", [])
+                    embeddings.append(embedding)
+                else:
+                    print(f"Embedding API错误: {response.status_code} - {response.text[:200]}")
+                    return []
+            except Exception as e:
+                print(f"Embedding失败: {e}")
+                return []
+        return embeddings
+    
+    def embed_documents(self, documents: List[str]) -> List[List[float]]:
+        return self(documents)
+    
+    def embed_query(self, query: str) -> List[float]:
+        result = self([query])
+        return result[0] if result else []
+
+
+class OllamaEmbeddingFunction:
+    """使用Ollama的Embedding函数（本地部署，完全免费）"""
+    
+    def __init__(self, base_url: str = "http://localhost:11434", model: str = "nomic-embed-text"):
+        self.base_url = base_url.rstrip('/')
+        self.model = model
+    
+    def __call__(self, input: List[str]) -> List[List[float]]:
+        """生成文档向量"""
+        embeddings = []
+        for text in input:
+            try:
+                response = httpx.post(
+                    f"{self.base_url}/api/embeddings",
+                    json={"model": self.model, "prompt": text},
+                    timeout=60.0
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    embedding = data.get("embedding", [])
+                    embeddings.append(embedding)
+                else:
+                    print(f"Ollama Embedding错误: {response.status_code}")
+                    return []
+            except Exception as e:
+                print(f"Ollama Embedding失败: {e}，请确保Ollama已启动")
+                return []
+        return embeddings
+    
+    def embed_documents(self, documents: List[str]) -> List[List[float]]:
+        return self(documents)
+    
+    def embed_query(self, query: str) -> List[float]:
+        result = self([query])
+        return result[0] if result else []
 
 
 class RAGService:
     """RAG服务类"""
 
     def __init__(self):
-        self._embeddings = None
+        self._embedding_func = None
         self._client = None
         self._fallback_docs = None
         self._embedding_init_failed = False
@@ -25,16 +105,37 @@ class RAGService:
 
     def _init_components(self) -> None:
         """延迟初始化向量存储组件"""
-        if self._embeddings is None and not self._embedding_init_failed:
-            try:
-                self._embeddings = HuggingFaceEmbeddings(
-                    model_name=config.embedding_model,
-                    model_kwargs={"device": config.embedding_device},
-                )
-                self._embedding_init_failed = False
-            except Exception as e:
-                print(f"Embedding模型加载失败: {e}")
-                self._embeddings = None
+        if self._embedding_func is None and not self._embedding_init_failed:
+            provider = config.get("embedding.provider", "ollama")
+            
+            if provider == "openai":
+                try:
+                    api_key = config.get("embedding.openai_api_key", "")
+                    base_url = config.get("embedding.openai_base_url", "https://api.openai.com/v1")
+                    model = config.get("embedding.openai_model", "text-embedding-3-small")
+                    if not api_key:
+                        raise ValueError("未配置OpenAI API Key")
+                    self._embedding_func = OpenAIEmbeddingFunction(api_key, base_url, model)
+                    self._embedding_init_failed = False
+                    print(f"Embedding模型加载成功: OpenAI兼容API ({model}) @ {base_url}")
+                except Exception as e:
+                    print(f"OpenAI Embedding加载失败: {e}")
+                    self._embedding_func = None
+                    self._embedding_init_failed = True
+            elif provider == "ollama":
+                try:
+                    ollama_url = config.get("embedding.ollama_url", "http://localhost:11434")
+                    ollama_model = config.get("embedding.ollama_model", "nomic-embed-text")
+                    self._embedding_func = OllamaEmbeddingFunction(ollama_url, ollama_model)
+                    self._embedding_init_failed = False
+                    print(f"Embedding模型加载成功: Ollama ({ollama_model})")
+                except Exception as e:
+                    print(f"Ollama Embedding加载失败: {e}")
+                    self._embedding_func = None
+                    self._embedding_init_failed = True
+            else:
+                print(f"未知的Embedding provider: {provider}，使用关键词匹配检索")
+                self._embedding_func = None
                 self._embedding_init_failed = True
 
         if self._client is None:
@@ -85,7 +186,7 @@ class RAGService:
         self._fallback_docs = store
         self._save_fallback_docs()
 
-    def _delete_fallback_docs(self, project_id: str, knowledge_id: str) -> None:
+    def _delete_fallback_docs(self, project_id: str, knowledge_id: str) -> bool:
         project_id = str(project_id)
         knowledge_id = str(knowledge_id)
         store = self._load_fallback_docs()
@@ -95,6 +196,8 @@ class RAGService:
             store[project_id] = project_docs
             self._fallback_docs = store
             self._save_fallback_docs()
+            return True
+        return False
 
     def _fallback_search(
         self, project_id: str, query: str, top_k: int = 5
@@ -158,41 +261,34 @@ class RAGService:
 
     def add_documents(
         self, project_id: str, knowledge_id: str, documents: List[str]
-    ) -> None:
+    ) -> Dict[str, Any]:
         """添加文档到知识库"""
         project_id = str(project_id)
         knowledge_id = str(knowledge_id)
         if not documents:
-            return
-        self._upsert_fallback_docs(project_id, knowledge_id, documents)
-
+            return {"indexed": False, "degraded": False, "vector_count": 0, "error": "empty_documents"}
+        
         self._init_components()
-
-        if self._embeddings is None:
-            if not self._embedding_warning_logged:
-                print("警告：Embedding模型未加载，已写入回退检索存储")
-                self._embedding_warning_logged = True
-            return
-
-        embeddings = self._embeddings.embed_documents(documents)
-
-        collection = self._get_or_create_collection(project_id)
-
-        ids = [f"{knowledge_id}_{i}" for i in range(len(documents))]
-
-        metadatas = [
-            {"knowledge_id": knowledge_id, "chunk_index": i}
-            for i in range(len(documents))
-        ]
-
+        self._upsert_fallback_docs(project_id, knowledge_id, documents)
+        
+        if self._embedding_func is None:
+            return {"indexed": True, "degraded": True, "vector_count": len(documents), "error": "embedding_unavailable"}
+        
         try:
-            collection.upsert(
-                embeddings=embeddings, documents=documents, ids=ids, metadatas=metadatas
-            )
-        except AttributeError:
-            collection.add(
-                embeddings=embeddings, documents=documents, ids=ids, metadatas=metadatas
-            )
+            embeddings = self._embedding_func.embed_documents(documents)
+            collection = self._get_or_create_collection(project_id)
+            ids = [f"{knowledge_id}_{i}" for i in range(len(documents))]
+            metadatas = [{"knowledge_id": knowledge_id, "chunk_index": i} for i in range(len(documents))]
+            
+            try:
+                collection.upsert(embeddings=embeddings, documents=documents, ids=ids, metadatas=metadatas)
+            except AttributeError:
+                collection.add(embeddings=embeddings, documents=documents, ids=ids, metadatas=metadatas)
+            
+            return {"indexed": True, "degraded": False, "vector_count": len(ids), "error": ""}
+        except Exception as e:
+            print(f"向量索引失败: {e}")
+            return {"indexed": True, "degraded": True, "vector_count": len(documents), "error": str(e)}
 
     def search(
         self, project_id: str, query: str, top_k: int = 5
@@ -200,75 +296,71 @@ class RAGService:
         """知识库检索"""
         project_id = str(project_id)
         self._init_components()
-
-        if self._embeddings is None:
-            if not self._embedding_warning_logged:
-                print("警告：Embedding模型未加载，使用回退检索")
-                self._embedding_warning_logged = True
+        
+        if self._embedding_func is None:
             return self._fallback_search(project_id, query, top_k)
-
-        query_embedding = self._embeddings.embed_query(query)
-
+        
         try:
-            collection = self._client.get_collection(
-                name=self._get_collection_name(project_id)
-            )
-        except Exception:
-            return self._fallback_search(project_id, query, top_k)
-
-        results = collection.query(query_embeddings=[query_embedding], n_results=top_k)
-
-        formatted_results = []
-        if results.get("documents") and results["documents"][0]:
-            for i, doc in enumerate(results["documents"][0]):
-                formatted_results.append(
-                    {
+            query_embedding = self._embedding_func.embed_query(query)
+            collection = self._client.get_collection(name=self._get_collection_name(project_id))
+            results = collection.query(query_embeddings=[query_embedding], n_results=top_k)
+            
+            formatted_results = []
+            if results.get("documents") and results["documents"][0]:
+                for i, doc in enumerate(results["documents"][0]):
+                    formatted_results.append({
                         "content": doc,
-                        "distance": (
-                            results["distances"][0][i]
-                            if results.get("distances")
-                            else 0
-                        ),
-                        "metadata": (
-                            results["metadatas"][0][i]
-                            if results.get("metadatas")
-                            else {}
-                        ),
-                    }
-                )
-
-        if not formatted_results:
+                        "distance": results["distances"][0][i] if results.get("distances") else 0,
+                        "metadata": results["metadatas"][0][i] if results.get("metadatas") else {},
+                    })
+            
+            if not formatted_results:
+                return self._fallback_search(project_id, query, top_k)
+            
+            filtered = [item for item in formatted_results if not isinstance(item.get("distance"), (int, float)) or float(item.get("distance")) <= 1.5]
+            return filtered if filtered else self._fallback_search(project_id, query, top_k)
+        except Exception as e:
+            print(f"向量检索失败: {e}")
             return self._fallback_search(project_id, query, top_k)
-        filtered = [
-            item
-            for item in formatted_results
-            if not isinstance(item.get("distance"), (int, float))
-            or float(item.get("distance")) <= 1.2
-        ]
-        if filtered:
-            return filtered
-        return self._fallback_search(project_id, query, top_k)
 
-    def delete_knowledge(self, project_id: str, knowledge_id: str) -> None:
+    def delete_knowledge(self, project_id: str, knowledge_id: str) -> Dict[str, Any]:
         """删除知识库文档"""
         project_id = str(project_id)
         knowledge_id = str(knowledge_id)
-        self._delete_fallback_docs(project_id, knowledge_id)
+        fallback_deleted = self._delete_fallback_docs(project_id, knowledge_id)
+        vector_deleted = 0
         try:
             self._init_components()
-            if self._client is None: return
-            
+            if self._client is None:
+                return {"status": "success", "vector_deleted": vector_deleted, "fallback_deleted": fallback_deleted}
+
             collection_name = self._get_collection_name(project_id)
             try:
                 collection = self._client.get_collection(name=collection_name)
-            except Exception:
-                return
+            except ValueError:
+                return {"status": "success", "vector_deleted": vector_deleted, "fallback_deleted": fallback_deleted}
 
-            # 使用 where 过滤器直接删除，比先 get 再 delete 更高效且准确
-            collection.delete(where={"knowledge_id": knowledge_id})
-            
+            ids_to_delete: List[str] = []
+            try:
+                existing = collection.get(where={"knowledge_id": knowledge_id})
+                if isinstance(existing, dict) and isinstance(existing.get("ids"), list):
+                    ids_to_delete = [str(item) for item in existing.get("ids") if item]
+            except TypeError:
+                existing = collection.get()
+                all_ids = existing.get("ids") if isinstance(existing, dict) else []
+                all_meta = existing.get("metadatas") if isinstance(existing, dict) else []
+                if isinstance(all_ids, list) and isinstance(all_meta, list):
+                    for idx, current_id in enumerate(all_ids):
+                        metadata = all_meta[idx] if idx < len(all_meta) else {}
+                        if isinstance(metadata, dict) and str(metadata.get("knowledge_id")) == knowledge_id:
+                            ids_to_delete.append(str(current_id))
+            if ids_to_delete:
+                collection.delete(ids=ids_to_delete)
+                vector_deleted = len(ids_to_delete)
+            return {"status": "success", "vector_deleted": vector_deleted, "fallback_deleted": fallback_deleted}
         except Exception as e:
             print(f"Chroma删除失败: {e}")
+            return {"status": "error", "vector_deleted": vector_deleted, "fallback_deleted": fallback_deleted, "error": str(e)}
 
     def get_collection_stats(self, project_id: str) -> Dict[str, Any]:
         """获取知识库统计信息"""

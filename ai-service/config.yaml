@@ -11,10 +11,20 @@ llm:
   max_tokens: 2000
 
 # Embedding配置
+# provider可选值:
+#   - ollama: 本地部署Ollama，完全免费，需要先安装Ollama并拉取模型
+#   - openai: 使用OpenAI兼容API（支持第三方中转）
 embedding:
-  model: "BAAI/bge-small-zh-v1.5"
-  device: "cpu" # cpu/cuda
-  batch_size: 32
+  provider: "ollama"  # ollama/openai
+  
+  # Ollama配置（本地部署，完全免费）
+  ollama_url: "http://localhost:11434"
+  ollama_model: "nomic-embed-text"  # 推荐: nomic-embed-text, mxbai-embed-large, all-minilm
+  
+  # 第三方中转 api.gpt.ge
+  openai_api_key: "sk-nUBEeoCenvXGiz8I22E6655730E64bD2B78e0752E4342598"
+  openai_base_url: "https://api.gpt.ge/v1"
+  openai_model: "text-embedding-3-small"  # 支持: text-embedding-3-small, text-embedding-ada-002等
 
 # Chroma配置
 vector_store:

@@ -66,7 +66,7 @@ class Config:
 
     @property
     def llm_model(self) -> str:
-        return self.get("llm.model", "deepseek-chat")
+        return self.get("llm.model", "deepseek-v3.2")
 
     @property
     def llm_api_key(self) -> str:

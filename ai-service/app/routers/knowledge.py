@@ -39,15 +39,26 @@ async def index_document(request: IndexRequest):
             return {"status": "success", "message": "文档为空，无需索引"}
         
         # 添加到向量库
-        rag_service.add_documents(
+        index_result = rag_service.add_documents(
             project_id=request.project_id,
             knowledge_id=request.knowledge_id,
             documents=chunks
         )
-        
+        if index_result.get("indexed"):
+            return {
+                "status": "success",
+                "indexed": True,
+                "degraded": False,
+                "vector_count": index_result.get("vector_count", len(chunks)),
+                "message": f"索引成功，共{len(chunks)}个文档块"
+            }
         return {
             "status": "success",
-            "message": f"索引成功，共{len(chunks)}个文档块"
+            "indexed": False,
+            "degraded": bool(index_result.get("degraded")),
+            "vector_count": 0,
+            "error": index_result.get("error") or "index_failed",
+            "message": "索引未完成"
         }
         
     except Exception as e:
@@ -55,13 +66,20 @@ async def index_document(request: IndexRequest):
 
 
 @router.delete("/index/{knowledge_id}")
-async def delete_index(project_id: str, knowledge_id: str):
+async def delete_index(knowledge_id: str, project_id: str):
     """
     删除知识库索引
     """
     try:
-        rag_service.delete_knowledge(project_id, knowledge_id)
-        return {"status": "success", "message": "删除成功"}
+        result = rag_service.delete_knowledge(project_id, knowledge_id)
+        if result.get("status") != "success":
+            raise HTTPException(status_code=500, detail=result.get("error") or "删除失败")
+        return {
+            "status": "success",
+            "message": "删除成功",
+            "vector_deleted": result.get("vector_deleted", 0),
+            "fallback_deleted": bool(result.get("fallback_deleted"))
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
 
