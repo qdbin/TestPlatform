@@ -174,6 +174,23 @@ class PlatformClient:
             print(f"保存用例失败: {e}")
             return None
 
+    def get_case_schema(self, project_id: str) -> Dict[str, Any]:
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                response = client.get(
+                    f"{self.base_url}/autotest/ai/schema/case",
+                    params={"projectId": project_id},
+                    headers=self._get_headers(),
+                )
+                if response.status_code == 200:
+                    payload = response.json() or {}
+                    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+                        return payload.get("data")
+                return {}
+        except Exception as e:
+            print(f"获取Case Schema失败: {e}")
+            return {}
+
     def get_module_list(self, project_id: str) -> List[Dict[str, Any]]:
         """
         获取项目模块列表

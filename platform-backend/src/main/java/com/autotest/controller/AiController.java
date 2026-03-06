@@ -10,6 +10,7 @@ import com.autotest.service.CaseService;
 import com.autotest.service.ProjectService;
 import com.autotest.mapper.ProjectMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.web.client.RestTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -43,6 +44,9 @@ public class AiController {
 
     @Resource
     private ObjectMapper objectMapper;
+
+    @Resource
+    private RestTemplate restTemplate;
 
     private String getLoginUserId(HttpServletRequest request) {
         Object userId = request.getSession(true).getAttribute("userId");
@@ -266,17 +270,23 @@ public class AiController {
         CompletableFuture.runAsync(() -> {
             try {
                 String message = (String) request.get("message");
-                Boolean useRag = (Boolean) request.getOrDefault("useRag", true);
-                String conversationId = (String) request.get("conversationId");
+                Object useRagRaw = request.get("useRag");
+                boolean useRag = !(useRagRaw instanceof Boolean) || (Boolean) useRagRaw;
 
                 Map<String, Object> aiRequest = new HashMap<>();
                 aiRequest.put("project_id", projectId);
                 aiRequest.put("message", message);
                 aiRequest.put("use_rag", useRag);
-                aiRequest.put("conversation_id", conversationId != null ? conversationId : "");
-                aiRequest.put("history_messages", request.get("historyMessages"));
+                aiRequest.put("messages", request.get("messages"));
                 aiService.streamChat(aiRequest, token, emitter);
             } catch (Exception e) {
+                try {
+                    Map<String, Object> errorPayload = new HashMap<>();
+                    errorPayload.put("type", "error");
+                    errorPayload.put("message", "AI服务调用失败: " + e.getMessage());
+                    emitter.send(SseEmitter.event().data(errorPayload));
+                } catch (Exception ignored) {
+                }
                 emitter.complete();
             }
         });
@@ -327,6 +337,32 @@ public class AiController {
         Map<String, Object> result = new HashMap<>();
         result.put("data", "success");
         result.put("msg", "用例保存成功");
+        return result;
+    }
+
+    @GetMapping("/schema/case")
+    public Map<String, Object> getCaseSchema(@RequestParam String projectId, HttpServletRequest httpServletRequest) {
+        assertProjectAccess(httpServletRequest, projectId);
+        String contextUrl = httpServletRequest.getScheme() + "://" + httpServletRequest.getServerName() + ":"
+                + httpServletRequest.getServerPort();
+        Map<String, Object> openapi = restTemplate.getForObject(contextUrl + "/v3/api-docs", Map.class);
+        Map<String, Object> result = new HashMap<>();
+        Map<String, Object> data = new HashMap<>();
+        if (openapi != null && openapi.get("components") instanceof Map) {
+            Map<?, ?> components = (Map<?, ?>) openapi.get("components");
+            if (components.get("schemas") instanceof Map) {
+                Map<?, ?> schemas = (Map<?, ?>) components.get("schemas");
+                Object caseRequest = schemas.get("CaseRequest");
+                Object caseApiRequest = schemas.get("CaseApiRequest");
+                if (caseRequest instanceof Map) {
+                    data.put("CaseRequest", caseRequest);
+                }
+                if (caseApiRequest instanceof Map) {
+                    data.put("CaseApiRequest", caseApiRequest);
+                }
+            }
+        }
+        result.put("data", data);
         return result;
     }
 

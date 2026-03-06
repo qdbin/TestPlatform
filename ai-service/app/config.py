@@ -105,6 +105,10 @@ class Config:
         return self.get("vector_store.collection_name_prefix", "project_")
 
     @property
+    def chroma_collection_name(self) -> str:
+        return self.get("vector_store.collection_name", "knowledge_docs")
+
+    @property
     def platform_base_url(self) -> str:
         return self.get("platform.base_url", "http://localhost:8080")
 

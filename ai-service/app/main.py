@@ -29,7 +29,7 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(chat.router, prefix="/ai", tags=["AI对话"])
-app.include_router(knowledge.router, prefix="/ai/knowledge", tags=["知识库管理"])
+app.include_router(knowledge.router, prefix="/ai/rag", tags=["RAG"])
 app.include_router(agent.router, prefix="/ai/agent", tags=["用例生成"])
 
 

@@ -12,6 +12,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.web.client.RestTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import javax.servlet.http.HttpServletRequest;
@@ -45,6 +46,8 @@ class AiControllerTest {
     private HttpServletRequest request;
     @Mock
     private HttpSession session;
+    @Mock
+    private RestTemplate restTemplate;
 
     private AiController buildController() {
         AiController controller = new AiController();
@@ -53,6 +56,7 @@ class AiControllerTest {
         ReflectionTestUtils.setField(controller, "projectMapper", projectMapper);
         ReflectionTestUtils.setField(controller, "caseService", caseService);
         ReflectionTestUtils.setField(controller, "objectMapper", new ObjectMapper());
+        ReflectionTestUtils.setField(controller, "restTemplate", restTemplate);
         return controller;
     }
 
@@ -111,20 +115,49 @@ class AiControllerTest {
         body.put("projectId", "p1");
         body.put("message", "继续回答");
         body.put("useRag", true);
-        body.put("conversationId", "conv_1");
         List<Map<String, Object>> history = new ArrayList<>();
         Map<String, Object> userMessage = new HashMap<>();
         userMessage.put("role", "user");
         userMessage.put("content", "上一个问题");
         history.add(userMessage);
-        body.put("historyMessages", history);
+        body.put("messages", history);
 
         controller.chatStream(body, "tok", request);
         ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
         verify(aiService, timeout(1000)).streamChat(captor.capture(), eq("tok"), any());
         Map<String, Object> aiRequest = captor.getValue();
         assertEquals("p1", aiRequest.get("project_id"));
-        assertEquals("conv_1", aiRequest.get("conversation_id"));
-        assertEquals(history, aiRequest.get("history_messages"));
+        assertEquals(history, aiRequest.get("messages"));
+    }
+
+    @Test
+    void getCaseSchemaShouldReturnComponents() {
+        AiController controller = buildController();
+        Project project = new Project();
+        project.setId("p1");
+        UserProject userProject = new UserProject();
+        userProject.setProjectId("p1");
+        userProject.setUserId("u1");
+        when(request.getSession(true)).thenReturn(session);
+        when(session.getAttribute("userId")).thenReturn("u1");
+        when(projectService.getProjectInfo("p1")).thenReturn(project);
+        when(projectMapper.getProjectUser("p1", "u1")).thenReturn(userProject);
+        when(request.getScheme()).thenReturn("http");
+        when(request.getServerName()).thenReturn("localhost");
+        when(request.getServerPort()).thenReturn(8080);
+
+        Map<String, Object> schemas = new HashMap<>();
+        schemas.put("CaseRequest", new HashMap<>());
+        schemas.put("CaseApiRequest", new HashMap<>());
+        Map<String, Object> components = new HashMap<>();
+        components.put("schemas", schemas);
+        Map<String, Object> openapi = new HashMap<>();
+        openapi.put("components", components);
+        when(restTemplate.getForObject("http://localhost:8080/v3/api-docs", Map.class)).thenReturn(openapi);
+
+        Map<String, Object> result = controller.getCaseSchema("p1", request);
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        assertEquals(true, data.containsKey("CaseRequest"));
+        assertEquals(true, data.containsKey("CaseApiRequest"));
     }
 }

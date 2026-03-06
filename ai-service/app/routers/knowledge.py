@@ -1,165 +1,96 @@
-"""
-知识库管理路由
-处理知识库文档的索引、检索等请求
-"""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 from app.services.rag_service import rag_service
 from app.utils.chunking import chunk_text
 
 router = APIRouter()
 
 
-class IndexRequest(BaseModel):
-    """索引请求"""
-    knowledge_id: str
+class RagAddRequest(BaseModel):
     project_id: str
-    name: str
+    doc_id: str
+    doc_type: str
+    doc_name: str
     content: str
 
 
-class SearchRequest(BaseModel):
-    """检索请求"""
+class RagQueryRequest(BaseModel):
     project_id: str
-    query: str
+    question: str
     top_k: int = 5
+    messages: List[Dict[str, Any]] = []
 
 
-@router.post("/index")
-async def index_document(request: IndexRequest):
-    """
-    索引知识库文档
-    """
+class RagDeleteRequest(BaseModel):
+    doc_id: str
+
+
+@router.post("/add")
+async def add_document(request: RagAddRequest):
     try:
-        # 文档分块
-        chunks = chunk_text(request.content, chunk_size=500, overlap=50)
-        
+        chunks = chunk_text(request.content, chunk_size=1200, overlap=80)
         if not chunks:
-            return {"status": "success", "message": "文档为空，无需索引"}
-        
-        # 添加到向量库
-        index_result = rag_service.add_documents(
-            project_id=request.project_id,
-            knowledge_id=request.knowledge_id,
-            documents=chunks
-        )
-        if index_result.get("indexed"):
             return {
                 "status": "success",
-                "indexed": True,
+                "indexed": False,
                 "degraded": False,
-                "vector_count": index_result.get("vector_count", len(chunks)),
-                "message": f"索引成功，共{len(chunks)}个文档块"
+                "vector_count": 0,
+                "error": "empty_documents",
             }
-        return {
-            "status": "success",
-            "indexed": False,
-            "degraded": bool(index_result.get("degraded")),
-            "vector_count": 0,
-            "error": index_result.get("error") or "index_failed",
-            "message": "索引未完成"
-        }
-        
+        index_result = rag_service.add_document(
+            project_id=request.project_id,
+            doc_id=request.doc_id,
+            doc_type=request.doc_type,
+            doc_name=request.doc_name,
+            documents=chunks,
+        )
+        return {"status": "success", **index_result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"索引失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"新增文档失败: {str(e)}")
 
 
-@router.delete("/index/{knowledge_id}")
-async def delete_index(knowledge_id: str, project_id: str):
-    """
-    删除知识库索引
-    """
+@router.post("/delete")
+async def delete_document(request: RagDeleteRequest):
     try:
-        result = rag_service.delete_knowledge(project_id, knowledge_id)
+        result = rag_service.delete_document(request.doc_id)
         if result.get("status") != "success":
             raise HTTPException(status_code=500, detail=result.get("error") or "删除失败")
-        return {
-            "status": "success",
-            "message": "删除成功",
-            "vector_deleted": result.get("vector_deleted", 0),
-            "fallback_deleted": bool(result.get("fallback_deleted"))
-        }
+        return {"status": "success", "vector_deleted": result.get("vector_deleted", 0)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
 
 
-@router.post("/search")
-async def search_knowledge(request: SearchRequest):
-    """
-    知识库检索
-    """
+@router.post("/query")
+async def query_knowledge(request: RagQueryRequest):
     try:
         results = rag_service.search(
             project_id=request.project_id,
-            query=request.query,
-            top_k=request.top_k
+            query=request.question,
+            top_k=request.top_k,
         )
-        
+        if not results:
+            return {
+                "status": "success",
+                "data": [],
+                "answer": "未找到相关文档",
+                "has_context": False,
+            }
+        context = "\n\n".join([str(item.get("content") or "") for item in results if item])
         return {
             "status": "success",
-            "data": results
+            "data": results,
+            "answer": context,
+            "has_context": True,
         }
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"检索失败: {str(e)}")
 
 
 @router.get("/stats/{project_id}")
 async def get_stats(project_id: str):
-    """
-    获取知识库统计信息
-    """
     try:
         stats = rag_service.get_collection_stats(project_id)
-        return {
-            "status": "success",
-            "data": stats
-        }
+        return {"status": "success", "data": stats}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取统计失败: {str(e)}")
-
-
-@router.post("/sync/api")
-async def sync_api(project_id: str, apis: List[Dict[str, Any]]):
-    """
-    同步项目接口到知识库
-    将API信息转换为文档格式并索引
-    """
-    try:
-        for api in apis:
-            # 构建接口文档内容
-            content = f"""
-# {api.get('name', '未命名接口')}
-
-## 基本信息
-- 接口路径：{api.get('path', '')}
-- 请求方法：{api.get('method', '')}
-- 接口描述：{api.get('description', '')}
-
-## 请求参数
-{api.get('query', '')}
-
-## 请求体
-{api.get('body', '')}
-
-## 响应示例
-{api.get('response', '')}
-"""
-            # 分块
-            chunks = chunk_text(content, chunk_size=500, overlap=50)
-            
-            # 索引
-            rag_service.add_documents(
-                project_id=project_id,
-                knowledge_id=f"api_{api.get('id', '')}",
-                documents=chunks
-            )
-        
-        return {
-            "status": "success",
-            "message": f"同步成功，共处理{len(apis)}个接口"
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"同步失败: {str(e)}")

@@ -125,7 +125,9 @@ public class AiService {
         if (knowledge != null && knowledge.getProjectId() != null && !knowledge.getProjectId().isEmpty()) {
             targetProjectId = knowledge.getProjectId();
         }
-        deleteFromAiService("/ai/knowledge/index/" + knowledgeId + "?project_id=" + targetProjectId);
+        Map<String, Object> deleteRequest = new HashMap<>();
+        deleteRequest.put("doc_id", knowledgeId);
+        postToAiService("/ai/rag/delete", deleteRequest, null, Map.class);
         aiKnowledgeMapper.deleteKnowledge(knowledgeId);
     }
 
@@ -152,16 +154,13 @@ public class AiService {
             throw new LMException("知识库文档不存在");
         }
         try {
-            try {
-                deleteFromAiService("/ai/knowledge/index/" + knowledge.getId() + "?project_id=" + knowledge.getProjectId());
-            } catch (Exception ignored) {
-            }
             Map<String, Object> params = new HashMap<>();
-            params.put("knowledge_id", knowledge.getId());
+            params.put("doc_id", knowledge.getId());
             params.put("project_id", knowledge.getProjectId());
+            params.put("doc_type", knowledge.getDocType());
+            params.put("doc_name", knowledge.getName());
             params.put("content", knowledge.getContent());
-            params.put("name", knowledge.getName());
-            Map<String, Object> indexResult = postToAiService("/ai/knowledge/index", params, null, Map.class);
+            Map<String, Object> indexResult = postToAiService("/ai/rag/add", params, null, Map.class);
             boolean indexed = indexResult != null && Boolean.TRUE.equals(indexResult.get("indexed"));
             boolean degraded = indexResult != null && Boolean.TRUE.equals(indexResult.get("degraded"));
 
@@ -182,7 +181,7 @@ public class AiService {
             update.setUpdateTime(System.currentTimeMillis());
             update.setUpdateUser(knowledge.getUpdateUser());
             aiKnowledgeMapper.updateKnowledge(update);
-            if (!indexed) {
+            if (!indexed && !degraded) {
                 String error = indexResult == null ? "未知错误" : String.valueOf(indexResult.getOrDefault("error", "索引失败"));
                 throw new LMException("知识库索引失败: " + error);
             }
@@ -226,7 +225,7 @@ public class AiService {
 
         try {
             restTemplate.execute(
-                    aiServiceBaseUrl + "/ai/chat/stream",
+                aiServiceBaseUrl + "/ai/chat/stream",
                     HttpMethod.POST,
                     restTemplate.httpEntityCallback(entity),
                     response -> {

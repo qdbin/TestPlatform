@@ -135,53 +135,21 @@
                       <el-button
                         type="primary"
                         size="small"
-                        @click="goToCaseDraftEdit(msg.caseData)"
+                        @click="toggleCaseEdit(msg)"
                       >
-                        编辑并保存用例
+                        {{ msg.caseEditing ? "取消编辑" : "编辑用例JSON" }}
                       </el-button>
-                      <el-button
-                        v-if="Array.isArray(msg.apiIds) && msg.apiIds.length"
-                        size="small"
-                        @click="openApiEditorById(msg.apiIds[0])"
-                      >
-                        编辑首个接口
+                      <el-button type="success" size="small" @click="saveCaseFromMessage(msg)">
+                        保存用例
                       </el-button>
                     </div>
-                  </div>
-                </div>
-
-                <!-- 接口生成卡片 -->
-                <div v-if="msg.interfaceData" class="ai-card interface-card">
-                  <div class="card-header warning">
-                    <i class="el-icon-warning-outline"></i> 未找到匹配接口
-                  </div>
-                  <div class="card-body">
-                    <p>当前项目未找到匹配的接口。已为你生成接口定义草稿：</p>
-                    <p v-if="Array.isArray(msg.apiIds) && msg.apiIds.length">
-                      已自动保存接口ID：{{ msg.apiIds.join(", ") }}
-                    </p>
-                    <ul class="interface-list">
-                      <li v-for="(item, idx) in msg.interfaceData" :key="idx">
-                        <el-tag size="mini">{{ item.method }}</el-tag>
-                        {{ item.path }}
-                      </li>
-                    </ul>
-                    <div class="card-actions">
-                      <el-button
-                        type="warning"
-                        size="small"
-                        @click="goToInterfaceCreate(msg.interfaceData)"
-                      >
-                        创建接口
-                      </el-button>
-                      <el-button
-                        v-if="Array.isArray(msg.apiIds) && msg.apiIds.length"
-                        size="small"
-                        @click="openApiEditorById(msg.apiIds[0])"
-                      >
-                        编辑已保存接口
-                      </el-button>
-                    </div>
+                    <el-input
+                      v-if="msg.caseEditing"
+                      v-model="msg.caseJsonText"
+                      type="textarea"
+                      :rows="12"
+                      class="case-json-editor"
+                    ></el-input>
                   </div>
                 </div>
               </div>
@@ -486,9 +454,7 @@ export default {
     this.scheduleMermaidRender();
   },
   deactivated() {
-    Object.keys(this.activeControllers).forEach((id) => {
-      this.abortConversationRequest(id);
-    });
+    this.scheduleMermaidRender();
   },
   methods: {
     openKnowledgeManage() {
@@ -793,14 +759,8 @@ export default {
       if (!this.inputMessage.trim()) return;
 
       const projectId = this.getCurrentProjectId();
-      const userId = this.getCurrentUserId();
-
       if (!projectId) {
         this.$message.error("当前项目ID为空，请重新选择项目后重试");
-        return;
-      }
-      if (!userId) {
-        this.$message.error("当前用户ID为空，请重新登录后重试");
         return;
       }
 
@@ -852,11 +812,9 @@ export default {
             },
             body: JSON.stringify({
               projectId: projectId,
-              userId: userId,
               message: inputMsg,
               useRag: this.useRag,
-              conversationId: sendingConversationId,
-              historyMessages: this.buildHistoryMessages(baseMessages),
+              messages: this.buildHistoryMessages([...baseMessages, userMsg]),
             }),
           }
         );
@@ -939,18 +897,6 @@ export default {
                   )
                   .filter(Boolean);
                 currentMsg.apiIds = Array.from(new Set(apiIds));
-                if (this.currentConversationId === sendingConversationId) {
-                  this.messages = sendingMessages;
-                  this.scrollToBottom();
-                }
-              } else if (data.type === "interfaces" && Array.isArray(data.interfaces)) {
-                // 更新当前助手消息，附加 interfaceData
-                lastEventAt = Date.now();
-                const currentMsg = sendingMessages[sendingMessages.length - 1];
-                currentMsg.interfaceData = data.interfaces;
-                currentMsg.apiIds = Array.isArray(data.api_ids)
-                  ? data.api_ids
-                  : [];
                 if (this.currentConversationId === sendingConversationId) {
                   this.messages = sendingMessages;
                   this.scrollToBottom();
@@ -1404,34 +1350,30 @@ export default {
       this.loadKnowledgeList();
     },
 
-    goToInterfaceCreate(interfaces) {
-      if (!interfaces || !Array.isArray(interfaces) || !interfaces.length) {
-        this.$message.warning("无待新增接口数据");
-        return;
+    toggleCaseEdit(msg) {
+      if (!msg || !msg.caseData) return;
+      if (!msg.caseEditing) {
+        this.$set(msg, "caseJsonText", JSON.stringify(msg.caseData, null, 2));
       }
-      const projectId = this.getCurrentProjectId();
-      const storageKey = `ai_interface_draft_v1:${projectId || "default"}`;
-      localStorage.setItem(storageKey, JSON.stringify(interfaces[0]));
-      this.$router.push({ path: "/caseCenter/interfaceManage/add" });
+      this.$set(msg, "caseEditing", !msg.caseEditing);
     },
 
-    openApiEditorById(apiId) {
-      if (!apiId) {
-        this.$message.warning("暂无可编辑的接口ID");
+    async saveCaseFromMessage(msg) {
+      if (!msg || !msg.caseData) {
+        this.$message.warning("暂无可保存的用例");
         return;
       }
-      this.$router.push({ path: `/caseCenter/interfaceManage/edit/${apiId}` });
-    },
-
-    goToCaseDraftEdit(caseData) {
-      if (!caseData || typeof caseData !== "object") {
-        this.$message.warning("暂无可编辑的用例草稿");
-        return;
+      let payloadCase = msg.caseData;
+      if (msg.caseEditing) {
+        try {
+          payloadCase = JSON.parse(msg.caseJsonText || "{}");
+        } catch (e) {
+          this.$message.error("JSON格式错误，请修正后再保存");
+          return;
+        }
       }
-      const projectId = this.getCurrentProjectId();
-      const storageKey = `ai_case_draft_v1:${projectId || "default"}`;
-      localStorage.setItem(storageKey, JSON.stringify(caseData));
-      this.$router.push({ path: "/caseCenter/caseManage/apiCase/add" });
+      await this.$post("/autotest/ai/generate/case/save", { case: payloadCase });
+      this.$message.success("保存成功");
     },
   },
 };

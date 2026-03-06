@@ -4,10 +4,51 @@
 """
 
 from typing import List
+import re
 
 
 class TextChunker:
     """文本分块器"""
+
+    @staticmethod
+    def chunk_markdown_by_heading(text: str, chunk_size: int = 1200) -> List[str]:
+        if not text:
+            return []
+        lines = text.splitlines()
+        sections: List[str] = []
+        current: List[str] = []
+        for line in lines:
+            if re.match(r"^\s{0,3}#{1,6}\s+", line) and current:
+                sections.append("\n".join(current).strip())
+                current = [line]
+            else:
+                current.append(line)
+        if current:
+            sections.append("\n".join(current).strip())
+        normalized_sections: List[str] = []
+        for section in sections:
+            if not section:
+                continue
+            if len(section) <= chunk_size:
+                normalized_sections.append(section)
+                continue
+            paragraphs = [item for item in section.split("\n\n") if item.strip()]
+            if not paragraphs:
+                normalized_sections.append(section)
+                continue
+            block = ""
+            for paragraph in paragraphs:
+                candidate = paragraph.strip()
+                if not candidate:
+                    continue
+                if block and len(block) + len(candidate) + 2 > chunk_size:
+                    normalized_sections.append(block.strip())
+                    block = candidate
+                else:
+                    block = f"{block}\n\n{candidate}".strip() if block else candidate
+            if block:
+                normalized_sections.append(block.strip())
+        return normalized_sections
 
     @staticmethod
     def chunk_by_paragraph(
@@ -142,4 +183,7 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]
     Returns:
         分块后的文本列表
     """
+    chunks = TextChunker.chunk_markdown_by_heading(text, max(chunk_size, 800))
+    if chunks:
+        return chunks
     return TextChunker.chunk_by_paragraph(text, chunk_size, overlap)

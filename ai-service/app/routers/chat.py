@@ -15,20 +15,14 @@ router = APIRouter()
 
 
 class ChatRequest(BaseModel):
-    """对话请求"""
-
     project_id: str
     message: str
     use_rag: bool = True
-    conversation_id: Optional[str] = None
-    history_messages: Optional[List[Dict[str, Any]]] = None
+    messages: Optional[List[Dict[str, Any]]] = None
 
 
 class ChatResponse(BaseModel):
-    """对话响应"""
-
     content: str
-    conversation_id: str
 
 
 # 系统提示词
@@ -60,7 +54,6 @@ async def chat(request: ChatRequest, raw_request: Request):
         return {
             "content": result.get("reply", ""),
             "case": result.get("case"),
-            "conversation_id": request.conversation_id or "",
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI服务调用失败: {str(e)}")
@@ -80,8 +73,7 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
                 token=token,
                 message=request.message,
                 use_rag=request.use_rag,
-                conversation_id=request.conversation_id or "",
-                history_messages=request.history_messages or [],
+                messages=request.messages or [],
             ):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
@@ -99,12 +91,3 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
             "X-Accel-Buffering": "no",
         },
     )
-
-
-@router.get("/history/{conversation_id}")
-async def get_history(conversation_id: str):
-    """
-    获取会话历史
-    """
-    # TODO: 从数据库获取会话历史
-    return {"conversation_id": conversation_id, "messages": []}
