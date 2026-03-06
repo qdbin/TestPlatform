@@ -78,4 +78,12 @@ class AiServiceTest {
         when(apiMapper.getApiDetail("a1")).thenReturn(api);
         assertDoesNotThrow(() -> service.validateCaseApiIds("p1", request));
     }
+
+    @Test
+    void validateCaseApiIdsShouldRejectEmptySteps() {
+        AiService service = buildService();
+        CaseRequest request = new CaseRequest();
+        request.setCaseApis(Collections.emptyList());
+        assertThrows(LMException.class, () -> service.validateCaseApiIds("p1", request));
+    }
 }

@@ -4,7 +4,7 @@
 # LLM配置
 llm:
   provider: "deepseek" # deepseek/openai/anthropic/qwen
-  model: "deepseek-chat"
+  model: "deepseek-chat"  # DeepSeek-V3模型
   api_key: "sk-204632e546384c0796afbf44d7c8e232"
   base_url: "https://api.deepseek.com/v1"
   temperature: 0.7

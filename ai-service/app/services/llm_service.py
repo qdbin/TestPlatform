@@ -3,14 +3,14 @@ LLM服务模块
 负责与大语言模型交互，支持多种provider切换
 """
 
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Iterator
 import os
 os.environ.pop("OPENAI_PROXY", None)
 try:
     from langchain_openai import ChatOpenAI
 except Exception:
     from langchain_community.chat_models import ChatOpenAI
-from langchain.schema import HumanMessage, SystemMessage, AIMessage
+from langchain.schema import HumanMessage, SystemMessage, AIMessage, BaseMessage
 from app.config import config
 
 
@@ -81,14 +81,15 @@ class LLMService:
 
     def chat_with_stream(
         self, messages: List[Dict[str, str]], system_prompt: Optional[str] = None
-    ):
-        """流式对话生成"""
+    ) -> Iterator[str]:
+        """流式对话生成 - 返回字符串迭代器"""
         try:
             llm = self._create_llm(True)
-        except Exception:
+        except Exception as e:
+            print(f"创建流式LLM失败: {e}")
             return iter([])
 
-        langchain_messages = []
+        langchain_messages: List[BaseMessage] = []
 
         if system_prompt:
             langchain_messages.append(SystemMessage(content=system_prompt))
@@ -104,7 +105,16 @@ class LLMService:
             elif role == "system":
                 langchain_messages.append(SystemMessage(content=content))
 
-        return llm.stream(langchain_messages)
+        def stream_generator():
+            try:
+                for chunk in llm.stream(langchain_messages):
+                    if hasattr(chunk, 'content') and chunk.content:
+                        yield chunk.content
+            except Exception as e:
+                print(f"流式生成错误: {e}")
+                yield f"[错误: {str(e)}]"
+
+        return stream_generator()
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """简单prompt生成"""

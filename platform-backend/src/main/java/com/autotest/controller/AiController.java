@@ -335,6 +335,9 @@ public class AiController {
             throw new LMException("case参数不能为空");
         }
         CaseRequest caseRequest = objectMapper.convertValue(caseObj, CaseRequest.class);
+        if (!"API".equalsIgnoreCase(caseRequest.getType())) {
+            throw new LMException("AI生成保存仅支持API用例");
+        }
         assertProjectAccess(httpServletRequest, caseRequest.getProjectId());
         aiService.validateCaseApiIds(caseRequest.getProjectId(), caseRequest);
         caseRequest.setUpdateUser(getLoginUserId(httpServletRequest));

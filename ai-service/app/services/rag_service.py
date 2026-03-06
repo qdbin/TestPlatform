@@ -7,12 +7,17 @@ from app.config import config
 
 class OpenAIEmbeddingFunction:
     """使用OpenAI兼容API的Embedding函数（支持OpenAI、Ollama等）"""
-    
-    def __init__(self, api_key: str = "", base_url: str = "https://api.openai.com/v1", model: str = "text-embedding-3-small"):
+
+    def __init__(
+        self,
+        api_key: str = "",
+        base_url: str = "https://api.openai.com/v1",
+        model: str = "text-embedding-3-small",
+    ):
         self.api_key = api_key
-        self.base_url = base_url.rstrip('/')
+        self.base_url = base_url.rstrip("/")
         self.model = model
-    
+
     def __call__(self, input: List[str]) -> List[List[float]]:
         """生成文档向量"""
         embeddings = []
@@ -21,28 +26,30 @@ class OpenAIEmbeddingFunction:
                 headers = {"Content-Type": "application/json"}
                 if self.api_key:
                     headers["Authorization"] = f"Bearer {self.api_key}"
-                
+
                 response = httpx.post(
                     f"{self.base_url}/embeddings",
                     headers=headers,
                     json={"model": self.model, "input": text},
-                    timeout=60.0
+                    timeout=60.0,
                 )
                 if response.status_code == 200:
                     data = response.json()
                     embedding = data.get("data", [{}])[0].get("embedding", [])
                     embeddings.append(embedding)
                 else:
-                    print(f"Embedding API错误: {response.status_code} - {response.text[:200]}")
+                    print(
+                        f"Embedding API错误: {response.status_code} - {response.text[:200]}"
+                    )
                     return []
             except Exception as e:
                 print(f"Embedding失败: {e}")
                 return []
         return embeddings
-    
+
     def embed_documents(self, documents: List[str]) -> List[List[float]]:
         return self(documents)
-    
+
     def embed_query(self, query: str) -> List[float]:
         result = self([query])
         return result[0] if result else []
@@ -50,11 +57,13 @@ class OpenAIEmbeddingFunction:
 
 class OllamaEmbeddingFunction:
     """使用Ollama的Embedding函数（本地部署，完全免费）"""
-    
-    def __init__(self, base_url: str = "http://localhost:11434", model: str = "nomic-embed-text"):
-        self.base_url = base_url.rstrip('/')
+
+    def __init__(
+        self, base_url: str = "http://localhost:11434", model: str = "nomic-embed-text"
+    ):
+        self.base_url = base_url.rstrip("/")
         self.model = model
-    
+
     def __call__(self, input: List[str]) -> List[List[float]]:
         """生成文档向量"""
         embeddings = []
@@ -64,7 +73,7 @@ class OllamaEmbeddingFunction:
                 legacy_resp = httpx.post(
                     f"{self.base_url}/api/embeddings",
                     json={"model": self.model, "prompt": text},
-                    timeout=60.0
+                    timeout=60.0,
                 )
                 if legacy_resp.status_code == 200:
                     legacy_data = legacy_resp.json() or {}
@@ -73,7 +82,7 @@ class OllamaEmbeddingFunction:
                     new_resp = httpx.post(
                         f"{self.base_url}/api/embed",
                         json={"model": self.model, "input": text},
-                        timeout=60.0
+                        timeout=60.0,
                     )
                     if new_resp.status_code == 200:
                         new_data = new_resp.json() or {}
@@ -91,10 +100,10 @@ class OllamaEmbeddingFunction:
             except Exception as e:
                 return []
         return embeddings
-    
+
     def embed_documents(self, documents: List[str]) -> List[List[float]]:
         return self(documents)
-    
+
     def embed_query(self, query: str) -> List[float]:
         result = self([query])
         return result[0] if result else []
@@ -111,26 +120,40 @@ class RAGService:
         """延迟初始化向量存储组件"""
         if self._embedding_func is None and not self._embedding_init_failed:
             provider = config.get("embedding.provider", "ollama")
-            
+
             if provider == "openai":
                 try:
                     api_key = config.get("embedding.openai_api_key", "")
-                    base_url = config.get("embedding.openai_base_url", "https://api.openai.com/v1")
-                    model = config.get("embedding.openai_model", "text-embedding-3-small")
+                    base_url = config.get(
+                        "embedding.openai_base_url", "https://api.openai.com/v1"
+                    )
+                    model = config.get(
+                        "embedding.openai_model", "text-embedding-3-small"
+                    )
                     if not api_key:
                         raise ValueError("未配置OpenAI API Key")
-                    self._embedding_func = OpenAIEmbeddingFunction(api_key, base_url, model)
+                    self._embedding_func = OpenAIEmbeddingFunction(
+                        api_key, base_url, model
+                    )
                     self._embedding_init_failed = False
-                    print(f"Embedding模型加载成功: OpenAI兼容API ({model}) @ {base_url}")
+                    print(
+                        f"Embedding模型加载成功: OpenAI兼容API ({model}) @ {base_url}"
+                    )
                 except Exception as e:
                     print(f"OpenAI Embedding加载失败: {e}")
                     self._embedding_func = None
                     self._embedding_init_failed = True
             elif provider == "ollama":
                 try:
-                    ollama_url = config.get("embedding.ollama_url", "http://localhost:11434")
-                    ollama_model = config.get("embedding.ollama_model", "nomic-embed-text")
-                    self._embedding_func = OllamaEmbeddingFunction(ollama_url, ollama_model)
+                    ollama_url = config.get(
+                        "embedding.ollama_url", "http://localhost:11434"
+                    )
+                    ollama_model = config.get(
+                        "embedding.ollama_model", "nomic-embed-text"
+                    )
+                    self._embedding_func = OllamaEmbeddingFunction(
+                        ollama_url, ollama_model
+                    )
                     self._embedding_init_failed = False
                     print(f"Embedding模型加载成功: Ollama ({ollama_model})")
                 except Exception as e:
@@ -168,7 +191,9 @@ class RAGService:
         length = max(1, len(source))
         return [item / length for item in values]
 
-    def _embed_documents_with_fallback(self, documents: List[str]) -> Tuple[List[List[float]], bool]:
+    def _embed_documents_with_fallback(
+        self, documents: List[str]
+    ) -> Tuple[List[List[float]], bool]:
         if self._embedding_func is not None:
             try:
                 vectors = self._embedding_func.embed_documents(documents)
@@ -187,6 +212,16 @@ class RAGService:
             except Exception:
                 pass
         return self._fallback_embed(query), True
+
+    def _format_chunk_document(self, doc_name: str, doc_type: str, chunk: str) -> str:
+        title = str(doc_name or "").strip()
+        dtype = str(doc_type or "").strip()
+        body = str(chunk or "").strip()
+        if title and dtype:
+            return f"文档名：{title}\n文档类型：{dtype}\n\n{body}"
+        if title:
+            return f"文档名：{title}\n\n{body}"
+        return body
 
     def add_document(
         self,
@@ -207,12 +242,26 @@ class RAGService:
                 "vector_count": 0,
                 "error": "empty_documents",
             }
+        normalized_docs = [
+            self._format_chunk_document(doc_name, doc_type, item)
+            for item in documents
+            if str(item or "").strip()
+        ]
+        if not normalized_docs:
+            return {
+                "indexed": False,
+                "degraded": False,
+                "vector_count": 0,
+                "error": "empty_documents",
+            }
         self._init_components()
         try:
             collection = self._get_or_create_collection()
             collection.delete(where=self._doc_where(project_id, doc_id))
-            embeddings, used_fallback = self._embed_documents_with_fallback(documents)
-            ids = [f"{project_id}_{doc_id}_{i}" for i in range(len(documents))]
+            embeddings, used_fallback = self._embed_documents_with_fallback(
+                normalized_docs
+            )
+            ids = [f"{project_id}_{doc_id}_{i}" for i in range(len(normalized_docs))]
             metadatas = [
                 {
                     "project_id": project_id,
@@ -221,18 +270,18 @@ class RAGService:
                     "doc_name": doc_name,
                     "chunk_index": i,
                 }
-                for i in range(len(documents))
+                for i in range(len(normalized_docs))
             ]
             collection.upsert(
                 embeddings=embeddings,
-                documents=documents,
+                documents=normalized_docs,
                 ids=ids,
                 metadatas=metadatas,
             )
             return {
                 "indexed": True,
                 "degraded": False,
-                "vector_count": len(documents),
+                "vector_count": len(normalized_docs),
                 "error": "fallback_embedding" if used_fallback else "",
             }
         except Exception as e:
@@ -271,13 +320,23 @@ class RAGService:
                 formatted_results.append(
                     {
                         "content": doc,
-                        "distance": results["distances"][0][i] if results.get("distances") else 0,
-                        "metadata": results["metadatas"][0][i] if results.get("metadatas") else {},
+                        "distance": (
+                            results["distances"][0][i]
+                            if results.get("distances")
+                            else 0
+                        ),
+                        "metadata": (
+                            results["metadatas"][0][i]
+                            if results.get("metadatas")
+                            else {}
+                        ),
                     }
                 )
         return ("fallback" if used_fallback else "success"), formatted_results
 
-    def _keyword_search(self, project_id: str, query: str, top_k: int) -> List[Dict[str, Any]]:
+    def _keyword_search(
+        self, project_id: str, query: str, top_k: int
+    ) -> List[Dict[str, Any]]:
         collection = self._get_or_create_collection()
         source = self._safe_collection_get(collection, {"project_id": project_id})
         documents = source.get("documents") or []
@@ -286,30 +345,50 @@ class RAGService:
             documents = []
         if not isinstance(metadatas, list):
             metadatas = []
-        terms = [item.strip().lower() for item in str(query or "").split() if item.strip()]
+        terms = [
+            item.strip().lower() for item in str(query or "").split() if item.strip()
+        ]
         if not terms and query:
             terms = [str(query).strip().lower()]
+        query_text = str(query or "").strip().lower()
+        if query_text and query_text not in terms:
+            terms.append(query_text)
         ranked: List[Dict[str, Any]] = []
         for idx, doc in enumerate(documents):
             text = str(doc or "")
             content_lc = text.lower()
+            metadata = metadatas[idx] if idx < len(metadatas) else {}
+            metadata_text = " ".join(
+                [
+                    str(metadata.get("doc_name") or ""),
+                    str(metadata.get("doc_type") or ""),
+                ]
+            ).lower()
             score = 0
             for term in terms:
-                if term and term in content_lc:
+                if not term:
+                    continue
+                if term in content_lc:
                     score += content_lc.count(term)
+                if metadata_text and term in metadata_text:
+                    score += 3
             if score <= 0:
                 continue
             ranked.append(
                 {
                     "content": text,
                     "distance": max(0.0, 1.0 - min(1.0, score / 10.0)),
-                    "metadata": metadatas[idx] if idx < len(metadatas) else {},
+                    "metadata": metadata,
                     "score": score,
                 }
             )
         ranked.sort(key=lambda item: item.get("score", 0), reverse=True)
         return [
-            {"content": item["content"], "distance": item["distance"], "metadata": item["metadata"]}
+            {
+                "content": item["content"],
+                "distance": item["distance"],
+                "metadata": item["metadata"],
+            }
             for item in ranked[:top_k]
         ]
 
@@ -351,7 +430,9 @@ class RAGService:
         try:
             self._init_components()
             collection = self._get_or_create_collection()
-            existing = self._safe_collection_get(collection, self._doc_where(project_id, doc_id))
+            existing = self._safe_collection_get(
+                collection, self._doc_where(project_id, doc_id)
+            )
             ids = existing.get("ids") if isinstance(existing, dict) else []
             delete_count = len(ids) if isinstance(ids, list) else 0
             collection.delete(where=self._doc_where(project_id, doc_id))

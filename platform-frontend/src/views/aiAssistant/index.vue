@@ -110,7 +110,8 @@
                   v-html="
                     renderContent(
                       msg.content ||
-                        (currentConversationLoading && index === messages.length - 1
+                        (currentConversationLoading &&
+                        index === messages.length - 1
                           ? '思考中...'
                           : '')
                     )
@@ -120,7 +121,7 @@
                 <!-- 用例生成卡片 -->
                 <div v-if="msg.caseData" class="ai-card case-card">
                   <div class="card-header">
-                    <i class="el-icon-s-order"></i> 用例草稿已生成
+                    <i class="el-icon-s-order"></i> 用例预览已生成
                   </div>
                   <div class="card-body">
                     <p>
@@ -139,8 +140,19 @@
                       >
                         {{ msg.caseEditing ? "取消编辑" : "编辑用例" }}
                       </el-button>
-                      <el-button type="success" size="small" @click="saveCaseFromMessage(msg)">
+                      <el-button
+                        type="success"
+                        size="small"
+                        @click="saveCaseFromMessage(msg)"
+                      >
                         保存用例
+                      </el-button>
+                      <el-button
+                        type="warning"
+                        size="small"
+                        @click="openCaseEditorFromMessage(msg)"
+                      >
+                        打开用例新增页
                       </el-button>
                     </div>
                     <div v-if="msg.caseEditing" class="case-edit-form">
@@ -149,7 +161,9 @@
                           <el-input v-model="msg.caseData.name"></el-input>
                         </el-form-item>
                         <el-form-item label="用例描述">
-                          <el-input v-model="msg.caseData.description"></el-input>
+                          <el-input
+                            v-model="msg.caseData.description"
+                          ></el-input>
                         </el-form-item>
                         <el-form-item label="步骤列表">
                           <div class="case-steps">
@@ -187,7 +201,9 @@
                               </el-button>
                             </div>
                           </div>
-                          <el-button type="text" @click="addCaseStep(msg)">新增步骤</el-button>
+                          <el-button type="text" @click="addCaseStep(msg)"
+                            >新增步骤</el-button
+                          >
                         </el-form-item>
                       </el-form>
                     </div>
@@ -492,6 +508,7 @@ export default {
     }
   },
   activated() {
+    this.loadConversations();
     this.scheduleMermaidRender();
   },
   deactivated() {
@@ -505,9 +522,15 @@ export default {
     getCurrentProjectId() {
       if (this.$store.state.projectId)
         return String(this.$store.state.projectId);
-      if (this.$store.state.userInfo && this.$store.state.userInfo.lastProject) {
+      if (
+        this.$store.state.userInfo &&
+        this.$store.state.userInfo.lastProject
+      ) {
         const lastProject = this.$store.state.userInfo.lastProject;
-        if (typeof lastProject === "string" || typeof lastProject === "number") {
+        if (
+          typeof lastProject === "string" ||
+          typeof lastProject === "number"
+        ) {
           return String(lastProject);
         }
         if (typeof lastProject === "object" && lastProject.id) {
@@ -595,7 +618,9 @@ export default {
     assertRequestSuccess(res, fallbackMessage) {
       const status = this.getResponseStatus(res);
       if (status !== 0) {
-        throw new Error(this.getResponseMessage(res) || fallbackMessage || "请求失败");
+        throw new Error(
+          this.getResponseMessage(res) || fallbackMessage || "请求失败"
+        );
       }
       return this.getResponseData(res);
     },
@@ -751,7 +776,8 @@ export default {
 
     isConversationLoading(conversationId) {
       return (
-        !!this.loadingMap[conversationId] && !!this.activeControllers[conversationId]
+        !!this.loadingMap[conversationId] &&
+        !!this.activeControllers[conversationId]
       );
     },
 
@@ -833,7 +859,9 @@ export default {
         this.isConversationLoading(sendingConversationId)
       )
         return;
-      const conversationIndex = this.getConversationIndex(sendingConversationId);
+      const conversationIndex = this.getConversationIndex(
+        sendingConversationId
+      );
       if (conversationIndex < 0) return;
       const baseMessages = Array.isArray(
         this.conversationList[conversationIndex].messages
@@ -882,6 +910,10 @@ export default {
         if (!response.ok || !response.body) {
           throw new Error(`网络异常或服务错误（HTTP ${response.status}）`);
         }
+        const contentType = String(response.headers.get("content-type") || "");
+        if (!contentType.includes("text/event-stream")) {
+          throw new Error("AI服务未返回SSE流，请检查后端流式配置");
+        }
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -917,12 +949,11 @@ export default {
             throw e;
           }
           if (done) {
-            if (!reachEnd) {
-              throw new Error("流式响应提前结束，请重试");
-            }
             break;
           }
-          const text = decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+          const text = decoder
+            .decode(value, { stream: true })
+            .replace(/\r\n/g, "\n");
           sseBuffer += text;
           let eventEnd = sseBuffer.indexOf("\n\n");
           while (eventEnd !== -1) {
@@ -947,14 +978,14 @@ export default {
               }
               if (data.type === "content" && data.delta) {
                 lastEventAt = Date.now();
-                sendingMessages[sendingMessages.length - 1].content += data.delta;
+                sendingMessages[sendingMessages.length - 1].content +=
+                  data.delta;
                 if (this.currentConversationId === sendingConversationId) {
                   this.messages = sendingMessages;
                   this.scrollToBottom();
                   this.scheduleMermaidRender();
                 }
               } else if (data.type === "case" && data.case) {
-                // 更新当前助手消息，附加 caseData
                 lastEventAt = Date.now();
                 const currentMsg = sendingMessages[sendingMessages.length - 1];
                 currentMsg.caseData = data.case;
@@ -976,6 +1007,7 @@ export default {
               } else if (data.type === "end") {
                 lastEventAt = Date.now();
                 reachEnd = true;
+                break;
               }
             }
             eventEnd = sseBuffer.indexOf("\n\n");
@@ -1004,11 +1036,14 @@ export default {
           });
           this.updateConversationById(sendingConversationId, sendingMessages);
           this.scheduleMermaidRender();
-          this.$message.error("AI服务调用失败：" + (error.message || "未知错误"));
+          this.$message.error(
+            "AI服务调用失败：" + (error.message || "未知错误")
+          );
         }
       } finally {
         this.markConversationLoading(sendingConversationId, false);
         this.$delete(this.activeControllers, sendingConversationId);
+        this.$forceUpdate();
         if (this.currentConversationId === sendingConversationId) {
           this.scrollToBottom();
         }
@@ -1361,9 +1396,12 @@ export default {
           const indexRes = await this.$post(
             `/autotest/ai/knowledge/index/${knowledgeId}?projectId=${projectId}`
           );
-          const indexData = this.assertRequestSuccess(indexRes, "索引失败") || {};
+          const indexData =
+            this.assertRequestSuccess(indexRes, "索引失败") || {};
           if (indexData && indexData.indexedStatus === "degraded") {
-            this.$message.warning("保存成功，但索引降级失败，请检查Embedding配置");
+            this.$message.warning(
+              "保存成功，但索引降级失败，请检查Embedding配置"
+            );
           } else {
             this.$message.success("保存成功，索引已完成");
           }
@@ -1455,7 +1493,8 @@ export default {
     },
 
     removeCaseStep(msg, stepIndex) {
-      if (!msg || !msg.caseData || !Array.isArray(msg.caseData.caseApis)) return;
+      if (!msg || !msg.caseData || !Array.isArray(msg.caseData.caseApis))
+        return;
       msg.caseData.caseApis.splice(stepIndex, 1);
       msg.caseData.caseApis = msg.caseData.caseApis.map((item, idx) => ({
         ...item,
@@ -1473,6 +1512,17 @@ export default {
       });
       this.assertRequestSuccess(res, "用例保存失败");
       this.$message.success("保存成功");
+    },
+
+    openCaseEditorFromMessage(msg) {
+      if (!msg || !msg.caseData) {
+        this.$message.warning("暂无可跳转的用例");
+        return;
+      }
+      const projectId = this.getCurrentProjectId();
+      const storageKey = `ai_case_draft_v1:${projectId || "default"}`;
+      localStorage.setItem(storageKey, JSON.stringify(msg.caseData));
+      this.$router.push({ path: "/caseCenter/caseManage/apiCase/add" });
     },
   },
 };

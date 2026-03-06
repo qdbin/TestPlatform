@@ -174,6 +174,10 @@ public class AiService {
             Map<String, Object> indexResult = postToAiService("/ai/rag/add", params, null, Map.class);
             boolean indexed = indexResult != null && Boolean.TRUE.equals(indexResult.get("indexed"));
             boolean degraded = indexResult != null && Boolean.TRUE.equals(indexResult.get("degraded"));
+            String indexError = indexResult == null ? "" : String.valueOf(indexResult.getOrDefault("error", ""));
+            if (indexed && "fallback_embedding".equals(indexError)) {
+                degraded = true;
+            }
 
             AiKnowledge update = new AiKnowledge();
             update.setId(knowledge.getId());
@@ -297,7 +301,7 @@ public class AiService {
 
     public void validateCaseApiIds(String projectId, CaseRequest caseRequest) {
         if (caseRequest == null || caseRequest.getCaseApis() == null || caseRequest.getCaseApis().isEmpty()) {
-            throw new LMException("用例步骤不能为空");
+            throw new LMException("请先创建接口");
         }
         for (CaseApiRequest step : caseRequest.getCaseApis()) {
             if (step == null || step.getApiId() == null || step.getApiId().trim().isEmpty()) {

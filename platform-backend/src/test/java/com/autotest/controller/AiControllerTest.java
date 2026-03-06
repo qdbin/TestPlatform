@@ -104,6 +104,19 @@ class AiControllerTest {
     }
 
     @Test
+    void saveGeneratedCaseShouldRejectNonApiType() {
+        AiController controller = buildController();
+        Map<String, Object> caseMap = new HashMap<>();
+        caseMap.put("projectId", "p1");
+        caseMap.put("name", "AI草稿");
+        caseMap.put("type", "WEB");
+        caseMap.put("caseApis", java.util.Collections.emptyList());
+        Map<String, Object> body = new HashMap<>();
+        body.put("case", caseMap);
+        assertThrows(RuntimeException.class, () -> controller.saveGeneratedCase(body, request));
+    }
+
+    @Test
     void chatStreamShouldForwardHistoryMessages() {
         AiController controller = buildController();
         Project project = new Project();

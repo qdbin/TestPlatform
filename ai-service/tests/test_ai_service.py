@@ -48,7 +48,11 @@ class FakeCollection:
         pairs = list(zip(self.docs, self.metadatas))
         if isinstance(where, dict):
             for key, value in where.items():
-                pairs = [item for item in pairs if isinstance(item[1], dict) and str(item[1].get(key)) == str(value)]
+                pairs = [
+                    item
+                    for item in pairs
+                    if isinstance(item[1], dict) and str(item[1].get(key)) == str(value)
+                ]
         top_docs = [item[0] for item in pairs[:n_results]]
         top_meta = [item[1] for item in pairs[:n_results]]
         top_distance = [0.0 for _ in top_docs]
@@ -64,6 +68,7 @@ class FakeCollection:
     def get(self, where=None, include=None):
         if not isinstance(where, dict):
             return {"ids": self.ids, "metadatas": self.metadatas}
+
         def matches(meta, expr):
             if not isinstance(expr, dict):
                 return False
@@ -75,6 +80,7 @@ class FakeCollection:
                 if str(meta.get(key)) != str(value):
                     return False
             return True
+
         matched = []
         for id_val, meta in zip(self.ids, self.metadatas):
             if not isinstance(meta, dict):
@@ -85,6 +91,7 @@ class FakeCollection:
 
     def delete(self, ids=None, where=None):
         if ids is None and isinstance(where, dict):
+
             def matches(meta, expr):
                 if not isinstance(expr, dict):
                     return False
@@ -96,6 +103,7 @@ class FakeCollection:
                     if str(meta.get(key)) != str(value):
                         return False
                 return True
+
             ids = []
             for id_val, meta in zip(self.ids, self.metadatas):
                 if not isinstance(meta, dict):
@@ -211,6 +219,7 @@ def test_rag_project_isolation(monkeypatch):
     assert all("支付接口B" not in item.get("content", "") for item in results_a)
     assert any("支付接口B" in item.get("content", "") for item in results_b)
 
+
 def test_rag_delete_knowledge(monkeypatch):
     from app.services.rag_service import rag_service
 
@@ -235,7 +244,9 @@ def test_platform_client_headers():
 def test_chat_api_uses_agent(monkeypatch, client: TestClient):
     from app.services import agent_service as agent_service_module
 
-    def fake_chat(project_id: str, token: str, message: str, use_rag: bool, messages=None):
+    def fake_chat(
+        project_id: str, token: str, message: str, use_rag: bool, messages=None
+    ):
         return {"reply": "你好", "case": {"name": "demo"}}
 
     monkeypatch.setattr(agent_service_module.agent_service, "chat", fake_chat)
@@ -254,12 +265,16 @@ def test_chat_api_uses_agent(monkeypatch, client: TestClient):
 def test_chat_stream_sse_format(monkeypatch, client: TestClient):
     from app.services import agent_service as agent_service_module
 
-    def fake_stream_chat(project_id: str, token: str, message: str, use_rag: bool, messages=None):
+    def fake_stream_chat(
+        project_id: str, token: str, message: str, use_rag: bool, messages=None
+    ):
         yield {"type": "content", "delta": "O"}
         yield {"type": "content", "delta": "K"}
         yield {"type": "case", "case": {"name": "demo"}}
 
-    monkeypatch.setattr(agent_service_module.agent_service, "stream_chat", fake_stream_chat)
+    monkeypatch.setattr(
+        agent_service_module.agent_service, "stream_chat", fake_stream_chat
+    )
 
     resp = client.post(
         "/ai/chat/stream",
@@ -291,7 +306,7 @@ def test_agent_chat_case_via_executor(monkeypatch):
         message="请帮我生成登录接口测试用例",
         use_rag=True,
     )
-    assert result.get("reply") == "已生成用例草稿，请确认后保存。"
+    assert result.get("reply") == "已生成用例预览，请确认后手动保存。"
     assert isinstance(result.get("case"), dict)
 
 
@@ -318,8 +333,12 @@ def test_generate_case_json_repair(monkeypatch):
         def get_case_schema(self, project_id: str):
             return {"CaseRequest": {"type": "object"}}
 
-    monkeypatch.setattr(agent_service_module, "get_platform_client", lambda token: FakePlatformClient())
-    monkeypatch.setattr(rag_service_module.rag_service, "search", lambda project_id, query, top_k=5: [])
+    monkeypatch.setattr(
+        agent_service_module, "get_platform_client", lambda token: FakePlatformClient()
+    )
+    monkeypatch.setattr(
+        rag_service_module.rag_service, "search", lambda project_id, query, top_k=5: []
+    )
     monkeypatch.setattr(
         llm_service_module.llm_service,
         "chat",
@@ -346,7 +365,9 @@ def test_generate_case_without_api_should_fail(monkeypatch):
         def get_api_list(self, project_id: str):
             return []
 
-    monkeypatch.setattr(agent_service_module, "get_platform_client", lambda token: EmptyClient())
+    monkeypatch.setattr(
+        agent_service_module, "get_platform_client", lambda token: EmptyClient()
+    )
     result = agent_service.generate_case(
         project_id="p2",
         token="tok",
@@ -367,8 +388,12 @@ def test_case_intent_should_require_action():
 def test_chat_prompt_no_context_private_vs_public():
     from app.services.agent_service import agent_service
 
-    private_prompt = agent_service._build_chat_prompt("当前项目登录失败怎么排查", [], "no_context")
-    public_prompt = agent_service._build_chat_prompt("周杰伦有哪些经典歌曲", [], "no_context")
+    private_prompt = agent_service._build_chat_prompt(
+        "当前项目登录失败怎么排查", [], "no_context"
+    )
+    public_prompt = agent_service._build_chat_prompt(
+        "周杰伦有哪些经典歌曲", [], "no_context"
+    )
     assert "未检索到证据" in private_prompt
     assert "不要提及知识库未命中" in public_prompt
 
@@ -401,8 +426,22 @@ def test_normalize_case_should_complete_flow_steps():
     from app.services.agent_service import agent_service
 
     api_details = [
-        {"id": "api_1", "name": "登录", "path": "/auth/login", "method": "POST", "moduleId": "m1", "moduleName": "鉴权"},
-        {"id": "api_2", "name": "用户信息", "path": "/user/profile", "method": "GET", "moduleId": "m1", "moduleName": "鉴权"},
+        {
+            "id": "api_1",
+            "name": "登录",
+            "path": "/auth/login",
+            "method": "POST",
+            "moduleId": "m1",
+            "moduleName": "鉴权",
+        },
+        {
+            "id": "api_2",
+            "name": "用户信息",
+            "path": "/user/profile",
+            "method": "GET",
+            "moduleId": "m1",
+            "moduleName": "鉴权",
+        },
     ]
     case_obj = {"name": "链路用例", "caseApis": [{"apiId": "api_1"}]}
     normalized = agent_service._normalize_case(
@@ -423,12 +462,20 @@ def test_rag_router_add_query_delete(monkeypatch, client: TestClient):
     monkeypatch.setattr(
         rag_service_module.rag_service,
         "add_document",
-        lambda project_id, doc_id, doc_type, doc_name, documents: {"indexed": True, "degraded": False, "vector_count": len(documents), "error": ""},
+        lambda project_id, doc_id, doc_type, doc_name, documents: {
+            "indexed": True,
+            "degraded": False,
+            "vector_count": len(documents),
+            "error": "",
+        },
     )
     monkeypatch.setattr(
         rag_service_module.rag_service,
         "search_with_status",
-        lambda project_id, query, top_k=5: {"status": "success", "data": [{"content": "命中内容", "metadata": {"project_id": project_id}}]},
+        lambda project_id, query, top_k=5: {
+            "status": "success",
+            "data": [{"content": "命中内容", "metadata": {"project_id": project_id}}],
+        },
     )
     monkeypatch.setattr(
         rag_service_module.rag_service,
@@ -437,7 +484,13 @@ def test_rag_router_add_query_delete(monkeypatch, client: TestClient):
     )
     add_resp = client.post(
         "/ai/rag/add",
-        json={"project_id": "p1", "doc_id": "d1", "doc_type": "manual", "doc_name": "文档", "content": "# H1\n内容"},
+        json={
+            "project_id": "p1",
+            "doc_id": "d1",
+            "doc_type": "manual",
+            "doc_name": "文档",
+            "content": "# H1\n内容",
+        },
     )
     assert add_resp.status_code == 200
     query_resp = client.post(
@@ -446,5 +499,70 @@ def test_rag_router_add_query_delete(monkeypatch, client: TestClient):
     )
     assert query_resp.status_code == 200
     assert query_resp.json().get("has_context") is True
-    delete_resp = client.post("/ai/rag/delete", json={"project_id": "p1", "doc_id": "d1"})
+    delete_resp = client.post(
+        "/ai/rag/delete", json={"project_id": "p1", "doc_id": "d1"}
+    )
     assert delete_resp.status_code == 200
+
+
+def test_platform_client_get_api_list_supports_pager_list(monkeypatch):
+    from app.tools.platform_tools import PlatformClient
+
+    class FakeResponse:
+        def __init__(self):
+            self.status_code = 200
+
+        def json(self):
+            return {
+                "status": 0,
+                "message": "成功",
+                "data": {
+                    "list": [
+                        {
+                            "id": "a1",
+                            "name": "登录接口",
+                            "path": "/auth/login",
+                            "method": "POST",
+                        },
+                        {
+                            "id": "a2",
+                            "name": "查询用户",
+                            "path": "/user/info",
+                            "method": "GET",
+                        },
+                    ],
+                    "total": 2,
+                },
+            }
+
+    class FakeClientCtx:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            return False
+
+        def post(self, url, json=None, headers=None):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.tools.platform_tools.httpx.Client", FakeClientCtx)
+    client = PlatformClient(base_url="http://localhost:8080", api_key="tok")
+    items = client.get_api_list("p1")
+    assert len(items) == 2
+    assert items[0]["id"] == "a1"
+
+
+def test_rag_doc_name_should_be_searchable(monkeypatch):
+    from app.services.rag_service import rag_service
+
+    rag_service._embedding_func = DummyEmbeddings()
+    rag_service._client = FakeClient()
+    rag_service._collection = None
+
+    rag_service.add_document("p_doc", "d_name", "manual", "韩斌", ["身高和其他信息"])
+    results = rag_service.search("p_doc", "韩斌", top_k=5)
+    assert len(results) > 0
+    assert any("韩斌" in str(item.get("content") or "") for item in results)

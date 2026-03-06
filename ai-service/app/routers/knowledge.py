@@ -56,7 +56,9 @@ async def delete_document(request: RagDeleteRequest):
     try:
         result = rag_service.delete_document(request.project_id, request.doc_id)
         if result.get("status") != "success":
-            raise HTTPException(status_code=500, detail=result.get("error") or "删除失败")
+            raise HTTPException(
+                status_code=500, detail=result.get("error") or "删除失败"
+            )
         return {"status": "success", "vector_deleted": result.get("vector_deleted", 0)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
@@ -78,7 +80,7 @@ async def query_knowledge(request: RagQueryRequest):
             elif status == "vector_error":
                 answer = "知识库服务异常，请稍后重试"
             else:
-                answer = "当前项目未找到相关知识"
+                answer = "未找到相关文档"
             return {
                 "status": "success",
                 "data": [],
@@ -86,7 +88,9 @@ async def query_knowledge(request: RagQueryRequest):
                 "has_context": False,
                 "rag_status": status or "no_context",
             }
-        context = "\n\n".join([str(item.get("content") or "") for item in results if item])
+        context = "\n\n".join(
+            [str(item.get("content") or "") for item in results if item]
+        )
         return {
             "status": "success",
             "data": results,

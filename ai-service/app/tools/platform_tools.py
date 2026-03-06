@@ -64,13 +64,14 @@ class PlatformClient:
                     outer_data = self._extract_success_data(payload)
                     if outer_data is None and self.last_error:
                         return []
-                    if isinstance(outer_data, dict) and isinstance(
-                        outer_data.get("data"), list
-                    ):
-                        return outer_data.get("data")
+                    if isinstance(outer_data, dict):
+                        if isinstance(outer_data.get("data"), list):
+                            return outer_data.get("data")
+                        if isinstance(outer_data.get("list"), list):
+                            return outer_data.get("list")
                     if isinstance(outer_data, list):
                         return outer_data
-                    self._mark_error("接口列表为空")
+                    self._mark_error("接口列表为空或返回结构不匹配")
                     return []
                 self._mark_error(f"HTTP {response.status_code}")
                 return []
