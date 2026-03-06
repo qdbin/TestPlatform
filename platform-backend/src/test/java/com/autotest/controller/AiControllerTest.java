@@ -3,6 +3,8 @@ package com.autotest.controller;
 import com.autotest.domain.Project;
 import com.autotest.domain.UserProject;
 import com.autotest.mapper.ProjectMapper;
+import com.autotest.request.AiChatStreamRequest;
+import com.autotest.request.AiGenerateCaseRequest;
 import com.autotest.service.AiService;
 import com.autotest.service.CaseService;
 import com.autotest.service.ProjectService;
@@ -30,6 +32,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.doNothing;
 
 @ExtendWith(MockitoExtension.class)
 class AiControllerTest {
@@ -80,12 +83,14 @@ class AiControllerTest {
         caseMap.put("name", "AI草稿");
         caseMap.put("type", "API");
         caseMap.put("caseApis", java.util.Collections.emptyList());
+        doNothing().when(aiService).validateCaseApiIds(eq("p1"), any());
         Map<String, Object> body = new HashMap<>();
         body.put("case", caseMap);
 
         Map<String, Object> result = controller.saveGeneratedCase(body, request);
         ArgumentCaptor<com.autotest.request.CaseRequest> captor = ArgumentCaptor.forClass(com.autotest.request.CaseRequest.class);
         verify(caseService).saveCase(captor.capture());
+        verify(aiService).validateCaseApiIds(eq("p1"), any());
         assertEquals("p1", captor.getValue().getProjectId());
         assertEquals("u1", captor.getValue().getUpdateUser());
         assertEquals("用例保存成功", result.get("msg"));
@@ -111,16 +116,16 @@ class AiControllerTest {
         when(projectService.getProjectInfo("p1")).thenReturn(project);
         when(projectMapper.getProjectUser("p1", "u1")).thenReturn(userProject);
 
-        Map<String, Object> body = new HashMap<>();
-        body.put("projectId", "p1");
-        body.put("message", "继续回答");
-        body.put("useRag", true);
+        AiChatStreamRequest body = new AiChatStreamRequest();
+        body.setProjectId("p1");
+        body.setMessage("继续回答");
+        body.setUseRag(true);
         List<Map<String, Object>> history = new ArrayList<>();
         Map<String, Object> userMessage = new HashMap<>();
         userMessage.put("role", "user");
         userMessage.put("content", "上一个问题");
         history.add(userMessage);
-        body.put("messages", history);
+        body.setMessages(history);
 
         controller.chatStream(body, "tok", request);
         ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
@@ -159,5 +164,36 @@ class AiControllerTest {
         Map<String, Object> data = (Map<String, Object>) result.get("data");
         assertEquals(true, data.containsKey("CaseRequest"));
         assertEquals(true, data.containsKey("CaseApiRequest"));
+    }
+
+    @Test
+    void generateCaseShouldForwardMessages() {
+        AiController controller = buildController();
+        Project project = new Project();
+        project.setId("p1");
+        UserProject userProject = new UserProject();
+        userProject.setProjectId("p1");
+        userProject.setUserId("u1");
+        when(request.getSession(true)).thenReturn(session);
+        when(session.getAttribute("userId")).thenReturn("u1");
+        when(projectService.getProjectInfo("p1")).thenReturn(project);
+        when(projectMapper.getProjectUser("p1", "u1")).thenReturn(userProject);
+        when(aiService.generateCase(anyMap(), eq("tok"))).thenReturn(new HashMap<>());
+
+        AiGenerateCaseRequest req = new AiGenerateCaseRequest();
+        req.setProjectId("p1");
+        req.setUserRequirement("生成登录用例");
+        req.setSelectedApis(java.util.Arrays.asList("a1"));
+        List<Map<String, Object>> messages = new ArrayList<>();
+        Map<String, Object> m = new HashMap<>();
+        m.put("role", "user");
+        m.put("content", "历史问题");
+        messages.add(m);
+        req.setMessages(messages);
+
+        controller.generateCase(req, "tok", request);
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(aiService).generateCase(captor.capture(), eq("tok"));
+        assertEquals(messages, captor.getValue().get("messages"));
     }
 }

@@ -4,6 +4,8 @@ import com.autotest.domain.AiKnowledge;
 import com.autotest.domain.Project;
 import com.autotest.common.exception.LMException;
 import com.autotest.request.AiKnowledgeRequest;
+import com.autotest.request.AiChatStreamRequest;
+import com.autotest.request.AiGenerateCaseRequest;
 import com.autotest.request.CaseRequest;
 import com.autotest.service.AiService;
 import com.autotest.service.CaseService;
@@ -20,6 +22,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -260,24 +263,24 @@ public class AiController {
      * 十一、AI对话（SSE流式）
      */
     @PostMapping("/chat/stream")
-    public SseEmitter chatStream(@RequestBody Map<String, Object> request,
+    public SseEmitter chatStream(@RequestBody AiChatStreamRequest request,
             @RequestHeader(value = "token", required = false) String token,
             HttpServletRequest httpServletRequest) {
-        String projectId = (String) request.get("projectId");
+        String projectId = request.getProjectId();
         assertProjectAccess(httpServletRequest, projectId);
         SseEmitter emitter = new SseEmitter(300000L); // 5分钟超时
 
         CompletableFuture.runAsync(() -> {
             try {
-                String message = (String) request.get("message");
-                Object useRagRaw = request.get("useRag");
-                boolean useRag = !(useRagRaw instanceof Boolean) || (Boolean) useRagRaw;
+                String message = request.getMessage();
+                boolean useRag = request.getUseRag() == null || request.getUseRag();
 
                 Map<String, Object> aiRequest = new HashMap<>();
                 aiRequest.put("project_id", projectId);
                 aiRequest.put("message", message);
+                aiRequest.put("question", message);
                 aiRequest.put("use_rag", useRag);
-                aiRequest.put("messages", request.get("messages"));
+                aiRequest.put("messages", request.getMessages());
                 aiService.streamChat(aiRequest, token, emitter);
             } catch (Exception e) {
                 try {
@@ -300,15 +303,16 @@ public class AiController {
      * 十二、生成测试用例
      */
     @PostMapping("/generate/case")
-    public Map<String, Object> generateCase(@RequestBody Map<String, Object> request,
+    public Map<String, Object> generateCase(@RequestBody AiGenerateCaseRequest request,
             @RequestHeader(value = "token", required = false) String token,
             HttpServletRequest httpServletRequest) {
-        String projectId = request.get("projectId") == null ? null : String.valueOf(request.get("projectId"));
+        String projectId = request.getProjectId();
         assertProjectAccess(httpServletRequest, projectId);
         Map<String, Object> payload = new HashMap<>();
         payload.put("project_id", projectId);
-        payload.put("user_requirement", request.get("userRequirement"));
-        payload.put("selected_apis", request.get("selectedApis"));
+        payload.put("user_requirement", request.getUserRequirement());
+        payload.put("selected_apis", request.getSelectedApis());
+        payload.put("messages", request.getMessages());
         return aiService.generateCase(payload, token);
     }
 
@@ -332,6 +336,7 @@ public class AiController {
         }
         CaseRequest caseRequest = objectMapper.convertValue(caseObj, CaseRequest.class);
         assertProjectAccess(httpServletRequest, caseRequest.getProjectId());
+        aiService.validateCaseApiIds(caseRequest.getProjectId(), caseRequest);
         caseRequest.setUpdateUser(getLoginUserId(httpServletRequest));
         caseService.saveCase(caseRequest);
         Map<String, Object> result = new HashMap<>();
@@ -343,22 +348,33 @@ public class AiController {
     @GetMapping("/schema/case")
     public Map<String, Object> getCaseSchema(@RequestParam String projectId, HttpServletRequest httpServletRequest) {
         assertProjectAccess(httpServletRequest, projectId);
+        return getSchemaByNames(projectId, "CaseRequest,CaseApiRequest", httpServletRequest);
+    }
+
+    @GetMapping("/schema/extract")
+    public Map<String, Object> getSchemaByNames(@RequestParam String projectId,
+            @RequestParam String names,
+            HttpServletRequest httpServletRequest) {
+        assertProjectAccess(httpServletRequest, projectId);
         String contextUrl = httpServletRequest.getScheme() + "://" + httpServletRequest.getServerName() + ":"
                 + httpServletRequest.getServerPort();
         Map<String, Object> openapi = restTemplate.getForObject(contextUrl + "/v3/api-docs", Map.class);
         Map<String, Object> result = new HashMap<>();
         Map<String, Object> data = new HashMap<>();
+        List<String> targetNames = Arrays.asList(String.valueOf(names).split(","));
         if (openapi != null && openapi.get("components") instanceof Map) {
             Map<?, ?> components = (Map<?, ?>) openapi.get("components");
             if (components.get("schemas") instanceof Map) {
                 Map<?, ?> schemas = (Map<?, ?>) components.get("schemas");
-                Object caseRequest = schemas.get("CaseRequest");
-                Object caseApiRequest = schemas.get("CaseApiRequest");
-                if (caseRequest instanceof Map) {
-                    data.put("CaseRequest", caseRequest);
-                }
-                if (caseApiRequest instanceof Map) {
-                    data.put("CaseApiRequest", caseApiRequest);
+                for (String rawName : targetNames) {
+                    String name = rawName == null ? "" : rawName.trim();
+                    if (name.isEmpty()) {
+                        continue;
+                    }
+                    Object schema = schemas.get(name);
+                    if (schema instanceof Map) {
+                        data.put(name, schema);
+                    }
                 }
             }
         }

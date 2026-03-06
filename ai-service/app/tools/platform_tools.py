@@ -15,6 +15,7 @@ class PlatformClient:
         self.base_url = base_url or config.platform_base_url
         self.api_key = api_key or ""
         self.timeout = config.platform_timeout
+        self.last_error = ""
 
     def _get_headers(self) -> Dict[str, str]:
         """获取请求头"""
@@ -23,6 +24,23 @@ class PlatformClient:
             "token": self.api_key,
         }
         return headers
+
+    def _mark_error(self, message: str):
+        self.last_error = str(message or "")
+
+    def get_last_error(self) -> str:
+        return self.last_error
+
+    def _extract_success_data(self, payload: Any) -> Any:
+        if not isinstance(payload, dict):
+            self._mark_error("平台响应格式错误")
+            return None
+        status = payload.get("status")
+        if status not in (0, "0", "success", "SUCCESS", True, None):
+            self._mark_error(str(payload.get("message") or "平台业务状态异常"))
+            return None
+        self._mark_error("")
+        return payload.get("data")
 
     def get_api_list(self, project_id: str) -> List[Dict[str, Any]]:
         """
@@ -43,19 +61,21 @@ class PlatformClient:
                 )
                 if response.status_code == 200:
                     payload = response.json() or {}
-                    outer_data = (
-                        payload.get("data") if isinstance(payload, dict) else None
-                    )
+                    outer_data = self._extract_success_data(payload)
+                    if outer_data is None and self.last_error:
+                        return []
                     if isinstance(outer_data, dict) and isinstance(
                         outer_data.get("data"), list
                     ):
                         return outer_data.get("data")
                     if isinstance(outer_data, list):
                         return outer_data
+                    self._mark_error("接口列表为空")
                     return []
+                self._mark_error(f"HTTP {response.status_code}")
                 return []
         except Exception as e:
-            print(f"获取接口列表失败: {e}")
+            self._mark_error(f"获取接口列表失败: {e}")
             return []
 
     def get_api_detail(self, api_id: str) -> Optional[Dict[str, Any]]:
@@ -76,52 +96,15 @@ class PlatformClient:
                 )
                 if response.status_code == 200:
                     payload = response.json() or {}
-                    if isinstance(payload, dict) and isinstance(
-                        payload.get("data"), dict
-                    ):
-                        return payload.get("data")
-                    return payload if isinstance(payload, dict) else None
-                return None
-        except Exception as e:
-            print(f"获取接口详情失败: {e}")
-            return None
-
-    def save_api(self, project_id: str, api_data: Dict[str, Any]) -> Optional[str]:
-        try:
-            payload = {
-                "id": "",
-                "name": str(api_data.get("name") or "AI生成接口"),
-                "level": str(api_data.get("level") or "P1"),
-                "moduleId": str(api_data.get("moduleId") or "0"),
-                "projectId": str(project_id),
-                "method": str(api_data.get("method") or "GET").upper(),
-                "path": str(api_data.get("path") or "/"),
-                "protocol": str(api_data.get("protocol") or "http"),
-                "domainSign": str(api_data.get("domainSign") or ""),
-                "description": str(api_data.get("description") or ""),
-                "header": api_data.get("header") if isinstance(api_data.get("header"), list) else [],
-                "body": api_data.get("body") if isinstance(api_data.get("body"), dict) else {"type": "json", "form": [], "json": "", "raw": "", "file": []},
-                "query": api_data.get("query") if isinstance(api_data.get("query"), list) else [],
-                "rest": api_data.get("rest") if isinstance(api_data.get("rest"), list) else [],
-            }
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.post(
-                    f"{self.base_url}/autotest/api/save",
-                    json=payload,
-                    headers=self._get_headers(),
-                )
-                if response.status_code == 200:
-                    if response.text:
-                        try:
-                            body = response.json()
-                            if isinstance(body, dict):
-                                return str(body.get("data") or body.get("id") or "")
-                        except Exception:
-                            return str(response.text).strip('"')
+                    data = self._extract_success_data(payload)
+                    if isinstance(data, dict):
+                        return data
+                    self._mark_error("接口详情为空")
                     return None
+                self._mark_error(f"HTTP {response.status_code}")
                 return None
         except Exception as e:
-            print(f"保存接口失败: {e}")
+            self._mark_error(f"获取接口详情失败: {e}")
             return None
 
     def get_environment_list(self, project_id: str) -> List[Dict[str, Any]]:
@@ -149,31 +132,6 @@ class PlatformClient:
             print(f"获取环境列表失败: {e}")
             return []
 
-    def save_case(self, case_data: Dict[str, Any]) -> Optional[str]:
-        """
-        保存测试用例
-
-        Args:
-            case_data: 用例数据
-
-        Returns:
-            用例ID
-        """
-        try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.post(
-                    f"{self.base_url}/autotest/case/save",
-                    json=case_data,
-                    headers=self._get_headers(),
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    return data.get("data")
-                return None
-        except Exception as e:
-            print(f"保存用例失败: {e}")
-            return None
-
     def get_case_schema(self, project_id: str) -> Dict[str, Any]:
         try:
             with httpx.Client(timeout=self.timeout) as client:
@@ -184,11 +142,12 @@ class PlatformClient:
                 )
                 if response.status_code == 200:
                     payload = response.json() or {}
-                    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
-                        return payload.get("data")
+                    data = self._extract_success_data(payload)
+                    if isinstance(data, dict):
+                        return data
                 return {}
         except Exception as e:
-            print(f"获取Case Schema失败: {e}")
+            self._mark_error(f"获取Case Schema失败: {e}")
             return {}
 
     def get_module_list(self, project_id: str) -> List[Dict[str, Any]]:

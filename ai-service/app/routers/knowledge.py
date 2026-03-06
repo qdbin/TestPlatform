@@ -23,6 +23,7 @@ class RagQueryRequest(BaseModel):
 
 
 class RagDeleteRequest(BaseModel):
+    project_id: str
     doc_id: str
 
 
@@ -53,7 +54,7 @@ async def add_document(request: RagAddRequest):
 @router.post("/delete")
 async def delete_document(request: RagDeleteRequest):
     try:
-        result = rag_service.delete_document(request.doc_id)
+        result = rag_service.delete_document(request.project_id, request.doc_id)
         if result.get("status") != "success":
             raise HTTPException(status_code=500, detail=result.get("error") or "删除失败")
         return {"status": "success", "vector_deleted": result.get("vector_deleted", 0)}
@@ -64,17 +65,26 @@ async def delete_document(request: RagDeleteRequest):
 @router.post("/query")
 async def query_knowledge(request: RagQueryRequest):
     try:
-        results = rag_service.search(
+        search_result = rag_service.search_with_status(
             project_id=request.project_id,
             query=request.question,
             top_k=request.top_k,
         )
+        results = search_result.get("data", [])
         if not results:
+            status = str(search_result.get("status") or "")
+            if status == "embedding_unavailable":
+                answer = "知识库服务异常，请稍后重试"
+            elif status == "vector_error":
+                answer = "知识库服务异常，请稍后重试"
+            else:
+                answer = "当前项目未找到相关知识"
             return {
                 "status": "success",
                 "data": [],
-                "answer": "未找到相关文档",
+                "answer": answer,
                 "has_context": False,
+                "rag_status": status or "no_context",
             }
         context = "\n\n".join([str(item.get("content") or "") for item in results if item])
         return {
@@ -82,6 +92,7 @@ async def query_knowledge(request: RagQueryRequest):
             "data": results,
             "answer": context,
             "has_context": True,
+            "rag_status": "success",
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"检索失败: {str(e)}")

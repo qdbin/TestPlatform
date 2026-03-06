@@ -15,6 +15,7 @@ class GenerateCaseRequest(BaseModel):
     project_id: str
     user_requirement: str
     selected_apis: Optional[List[str]] = None
+    messages: Optional[List[Dict[str, Any]]] = None
 
 
 @router.post("/generate-case")
@@ -28,7 +29,8 @@ async def generate_case(request: GenerateCaseRequest, raw_request: Request):
             project_id=request.project_id,
             token=token,
             user_requirement=request.user_requirement,
-            selected_apis=request.selected_apis
+            selected_apis=request.selected_apis,
+            messages=request.messages or [],
         )
         return result
         

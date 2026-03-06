@@ -2,8 +2,12 @@ package com.autotest.service;
 
 import com.autotest.domain.AiKnowledge;
 import com.autotest.common.exception.LMException;
+import com.autotest.dto.ApiDTO;
 import com.autotest.mapper.AiKnowledgeMapper;
+import com.autotest.mapper.ApiMapper;
 import com.autotest.request.AiKnowledgeRequest;
+import com.autotest.request.CaseApiRequest;
+import com.autotest.request.CaseRequest;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
@@ -39,6 +43,9 @@ public class AiService {
 
     @Resource
     private ObjectMapper objectMapper;
+
+    @Resource
+    private ApiMapper apiMapper;
 
     @Value("${ai.service.base-url:http://localhost:8001}")
     private String aiServiceBaseUrl;
@@ -126,6 +133,7 @@ public class AiService {
             targetProjectId = knowledge.getProjectId();
         }
         Map<String, Object> deleteRequest = new HashMap<>();
+        deleteRequest.put("project_id", targetProjectId);
         deleteRequest.put("doc_id", knowledgeId);
         postToAiService("/ai/rag/delete", deleteRequest, null, Map.class);
         aiKnowledgeMapper.deleteKnowledge(knowledgeId);
@@ -152,6 +160,9 @@ public class AiService {
         AiKnowledge knowledge = aiKnowledgeMapper.getKnowledgeById(knowledgeId);
         if (knowledge == null) {
             throw new LMException("知识库文档不存在");
+        }
+        if ("folder".equals(knowledge.getDocType())) {
+            throw new LMException("目录不支持索引");
         }
         try {
             Map<String, Object> params = new HashMap<>();
@@ -281,6 +292,21 @@ public class AiService {
             return getFromAiService("/ai/agent/api-list/" + projectId, token, Map.class);
         } catch (Exception e) {
             throw new LMException("获取接口列表失败: " + e.getMessage());
+        }
+    }
+
+    public void validateCaseApiIds(String projectId, CaseRequest caseRequest) {
+        if (caseRequest == null || caseRequest.getCaseApis() == null || caseRequest.getCaseApis().isEmpty()) {
+            throw new LMException("用例步骤不能为空");
+        }
+        for (CaseApiRequest step : caseRequest.getCaseApis()) {
+            if (step == null || step.getApiId() == null || step.getApiId().trim().isEmpty()) {
+                throw new LMException("用例步骤必须包含apiId");
+            }
+            ApiDTO api = apiMapper.getApiDetail(step.getApiId());
+            if (api == null || api.getProjectId() == null || !projectId.equals(api.getProjectId())) {
+                throw new LMException("用例步骤包含无效接口，请先创建接口");
+            }
         }
     }
 }

@@ -137,19 +137,60 @@
                         size="small"
                         @click="toggleCaseEdit(msg)"
                       >
-                        {{ msg.caseEditing ? "取消编辑" : "编辑用例JSON" }}
+                        {{ msg.caseEditing ? "取消编辑" : "编辑用例" }}
                       </el-button>
                       <el-button type="success" size="small" @click="saveCaseFromMessage(msg)">
                         保存用例
                       </el-button>
                     </div>
-                    <el-input
-                      v-if="msg.caseEditing"
-                      v-model="msg.caseJsonText"
-                      type="textarea"
-                      :rows="12"
-                      class="case-json-editor"
-                    ></el-input>
+                    <div v-if="msg.caseEditing" class="case-edit-form">
+                      <el-form label-width="90px" size="small">
+                        <el-form-item label="用例名称">
+                          <el-input v-model="msg.caseData.name"></el-input>
+                        </el-form-item>
+                        <el-form-item label="用例描述">
+                          <el-input v-model="msg.caseData.description"></el-input>
+                        </el-form-item>
+                        <el-form-item label="步骤列表">
+                          <div class="case-steps">
+                            <div
+                              v-for="(step, stepIndex) in msg.caseData.caseApis"
+                              :key="stepIndex"
+                              class="case-step-row"
+                            >
+                              <el-input
+                                v-model="step.apiId"
+                                placeholder="apiId"
+                                class="step-field api-id"
+                              ></el-input>
+                              <el-input
+                                v-model="step.description"
+                                placeholder="步骤描述"
+                                class="step-field"
+                              ></el-input>
+                              <el-input
+                                v-model="step.apiMethod"
+                                placeholder="方法"
+                                class="step-field short"
+                              ></el-input>
+                              <el-input
+                                v-model="step.apiPath"
+                                placeholder="路径"
+                                class="step-field"
+                              ></el-input>
+                              <el-button
+                                type="text"
+                                style="color: #f56c6c"
+                                @click="removeCaseStep(msg, stepIndex)"
+                              >
+                                删除
+                              </el-button>
+                            </div>
+                          </div>
+                          <el-button type="text" @click="addCaseStep(msg)">新增步骤</el-button>
+                        </el-form-item>
+                      </el-form>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -420,7 +461,7 @@ export default {
   computed: {
     currentConversationLoading() {
       if (!this.currentConversationId) return false;
-      return !!this.loadingMap[this.currentConversationId];
+      return this.isConversationLoading(this.currentConversationId);
     },
     isKnowledgeReadonly() {
       return this.knowledgeDialogMode === "view";
@@ -539,6 +580,24 @@ export default {
         current = current.data;
       }
       return current;
+    },
+
+    getResponseStatus(res) {
+      if (!res || !res.data || typeof res.data.status === "undefined") return 0;
+      return Number(res.data.status);
+    },
+
+    getResponseMessage(res) {
+      if (!res || !res.data) return "";
+      return String(res.data.message || res.data.msg || "");
+    },
+
+    assertRequestSuccess(res, fallbackMessage) {
+      const status = this.getResponseStatus(res);
+      if (status !== 0) {
+        throw new Error(this.getResponseMessage(res) || fallbackMessage || "请求失败");
+      }
+      return this.getResponseData(res);
     },
 
     getHistoryStorageKey() {
@@ -746,9 +805,10 @@ export default {
           (item) =>
             item &&
             (item.role === "user" || item.role === "assistant") &&
-            item.content
+            item.content &&
+            !item.interrupted &&
+            !String(item.content).startsWith("AI服务调用失败：")
         )
-        .slice(-20)
         .map((item) => ({
           role: item.role,
           content: item.content,
@@ -827,13 +887,22 @@ export default {
         const decoder = new TextDecoder();
         let sseBuffer = "";
         let reachEnd = false;
-        let hasDelta = false;
         let lastEventAt = Date.now();
+        const idleTimeoutMs = 120000;
         const readWithTimeout = () =>
           Promise.race([
             reader.read(),
             new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("流式响应超时，请重试")), 30000)
+              setTimeout(() => {
+                const idle = Date.now() - lastEventAt;
+                reject(
+                  new Error(
+                    idle >= idleTimeoutMs
+                      ? "流式响应超时，请重试"
+                      : "流式响应中断，请重试"
+                  )
+                );
+              }, idleTimeoutMs)
             ),
           ]);
 
@@ -845,12 +914,14 @@ export default {
             done = readResult.done;
             value = readResult.value;
           } catch (e) {
-            if (hasDelta) {
-              break;
-            }
             throw e;
           }
-          if (done) break;
+          if (done) {
+            if (!reachEnd) {
+              throw new Error("流式响应提前结束，请重试");
+            }
+            break;
+          }
           const text = decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
           sseBuffer += text;
           let eventEnd = sseBuffer.indexOf("\n\n");
@@ -875,7 +946,6 @@ export default {
                 continue;
               }
               if (data.type === "content" && data.delta) {
-                hasDelta = true;
                 lastEventAt = Date.now();
                 sendingMessages[sendingMessages.length - 1].content += data.delta;
                 if (this.currentConversationId === sendingConversationId) {
@@ -910,9 +980,6 @@ export default {
             }
             eventEnd = sseBuffer.indexOf("\n\n");
           }
-          if (hasDelta && Date.now() - lastEventAt > 8000) {
-            break;
-          }
           if (reachEnd) {
             break;
           }
@@ -923,6 +990,9 @@ export default {
           const last = sendingMessages[sendingMessages.length - 1];
           if (last && last.role === "assistant" && !last.content) {
             sendingMessages.pop();
+            this.updateConversationById(sendingConversationId, sendingMessages);
+          } else if (last && last.role === "assistant") {
+            last.interrupted = true;
             this.updateConversationById(sendingConversationId, sendingMessages);
           }
         } else {
@@ -995,6 +1065,7 @@ export default {
     handleSendAction() {
       if (this.currentConversationLoading && this.currentConversationId) {
         this.abortConversationRequest(this.currentConversationId);
+        this.$message.info("已停止生成");
         return;
       }
       this.sendMessage();
@@ -1279,8 +1350,7 @@ export default {
         sourceType: "manual",
         updateUser: userId,
       });
-
-      const knowledgeId = this.getResponseData(saveRes);
+      const knowledgeId = this.assertRequestSuccess(saveRes, "保存知识库失败");
 
       if (
         typeof knowledgeId === "string" &&
@@ -1291,7 +1361,7 @@ export default {
           const indexRes = await this.$post(
             `/autotest/ai/knowledge/index/${knowledgeId}?projectId=${projectId}`
           );
-          const indexData = this.getResponseData(indexRes) || {};
+          const indexData = this.assertRequestSuccess(indexRes, "索引失败") || {};
           if (indexData && indexData.indexedStatus === "degraded") {
             this.$message.warning("保存成功，但索引降级失败，请检查Embedding配置");
           } else {
@@ -1333,9 +1403,10 @@ export default {
     async reindexKnowledge(kb) {
       const projectId = this.getCurrentProjectId();
       if (!projectId || !kb || !kb.id) return;
-      await this.$post(
+      const res = await this.$post(
         `/autotest/ai/knowledge/index/${kb.id}?projectId=${projectId}`
       );
+      this.assertRequestSuccess(res, "索引失败");
       this.$message.success("索引提交成功");
       this.loadKnowledgeList();
     },
@@ -1343,19 +1414,53 @@ export default {
     async deleteKnowledge(kb) {
       const projectId = this.getCurrentProjectId();
       if (!projectId || !kb || !kb.id) return;
-      await this.$delete(
+      const res = await this.$delete(
         `/autotest/ai/knowledge/${kb.id}?projectId=${projectId}`
       );
+      this.assertRequestSuccess(res, "删除失败");
       this.$message.success("删除成功");
       this.loadKnowledgeList();
     },
 
     toggleCaseEdit(msg) {
       if (!msg || !msg.caseData) return;
-      if (!msg.caseEditing) {
-        this.$set(msg, "caseJsonText", JSON.stringify(msg.caseData, null, 2));
+      if (!Array.isArray(msg.caseData.caseApis)) {
+        this.$set(msg.caseData, "caseApis", []);
       }
       this.$set(msg, "caseEditing", !msg.caseEditing);
+    },
+
+    addCaseStep(msg) {
+      if (!msg || !msg.caseData) return;
+      if (!Array.isArray(msg.caseData.caseApis)) {
+        this.$set(msg.caseData, "caseApis", []);
+      }
+      msg.caseData.caseApis.push({
+        id: "",
+        index: msg.caseData.caseApis.length + 1,
+        caseId: "",
+        apiId: "",
+        description: "",
+        header: [],
+        body: { type: "json", form: [], json: "", raw: "", file: [] },
+        query: [],
+        rest: [],
+        assertion: [],
+        relation: [],
+        controller: [],
+        apiMethod: "",
+        apiName: "",
+        apiPath: "",
+      });
+    },
+
+    removeCaseStep(msg, stepIndex) {
+      if (!msg || !msg.caseData || !Array.isArray(msg.caseData.caseApis)) return;
+      msg.caseData.caseApis.splice(stepIndex, 1);
+      msg.caseData.caseApis = msg.caseData.caseApis.map((item, idx) => ({
+        ...item,
+        index: idx + 1,
+      }));
     },
 
     async saveCaseFromMessage(msg) {
@@ -1363,16 +1468,10 @@ export default {
         this.$message.warning("暂无可保存的用例");
         return;
       }
-      let payloadCase = msg.caseData;
-      if (msg.caseEditing) {
-        try {
-          payloadCase = JSON.parse(msg.caseJsonText || "{}");
-        } catch (e) {
-          this.$message.error("JSON格式错误，请修正后再保存");
-          return;
-        }
-      }
-      await this.$post("/autotest/ai/generate/case/save", { case: payloadCase });
+      const res = await this.$post("/autotest/ai/generate/case/save", {
+        case: msg.caseData,
+      });
+      this.assertRequestSuccess(res, "用例保存失败");
       this.$message.success("保存成功");
     },
   },
@@ -1763,6 +1862,38 @@ export default {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.case-edit-form {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.case-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.case-step-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.step-field {
+  flex: 1;
+}
+
+.step-field.short {
+  max-width: 90px;
+}
+
+.step-field.api-id {
+  max-width: 120px;
 }
 
 .mermaid-preview {

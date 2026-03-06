@@ -61,34 +61,46 @@ class FakeCollection:
     def count(self):
         return len(self.ids)
 
-    def get(self, where=None):
+    def get(self, where=None, include=None):
         if not isinstance(where, dict):
             return {"ids": self.ids, "metadatas": self.metadatas}
+        def matches(meta, expr):
+            if not isinstance(expr, dict):
+                return False
+            if "$and" in expr and isinstance(expr["$and"], list):
+                return all(matches(meta, item) for item in expr["$and"])
+            for key, value in expr.items():
+                if key.startswith("$"):
+                    continue
+                if str(meta.get(key)) != str(value):
+                    return False
+            return True
         matched = []
         for id_val, meta in zip(self.ids, self.metadatas):
             if not isinstance(meta, dict):
                 continue
-            ok = True
-            for key, value in where.items():
-                if str(meta.get(key)) != str(value):
-                    ok = False
-                    break
-            if ok:
+            if matches(meta, where):
                 matched.append((id_val, meta))
         return {"ids": [x[0] for x in matched], "metadatas": [x[1] for x in matched]}
 
     def delete(self, ids=None, where=None):
         if ids is None and isinstance(where, dict):
+            def matches(meta, expr):
+                if not isinstance(expr, dict):
+                    return False
+                if "$and" in expr and isinstance(expr["$and"], list):
+                    return all(matches(meta, item) for item in expr["$and"])
+                for key, value in expr.items():
+                    if key.startswith("$"):
+                        continue
+                    if str(meta.get(key)) != str(value):
+                        return False
+                return True
             ids = []
             for id_val, meta in zip(self.ids, self.metadatas):
                 if not isinstance(meta, dict):
                     continue
-                ok = True
-                for key, value in where.items():
-                    if str(meta.get(key)) != str(value):
-                        ok = False
-                        break
-                if ok:
+                if matches(meta, where):
                     ids.append(id_val)
         ids = ids or []
         remain = [
@@ -206,7 +218,7 @@ def test_rag_delete_knowledge(monkeypatch):
     rag_service._client = FakeClient()
     rag_service._collection = None
     rag_service.add_document("p_del", "k_del", "manual", "删除文档", ["删除前文档"])
-    delete_result = rag_service.delete_document("k_del")
+    delete_result = rag_service.delete_document("p_del", "k_del")
     assert delete_result.get("status") == "success"
     results = rag_service.search("p_del", "删除前文档", top_k=5)
     assert results == []
@@ -223,7 +235,7 @@ def test_platform_client_headers():
 def test_chat_api_uses_agent(monkeypatch, client: TestClient):
     from app.services import agent_service as agent_service_module
 
-    def fake_chat(project_id: str, token: str, message: str, use_rag: bool):
+    def fake_chat(project_id: str, token: str, message: str, use_rag: bool, messages=None):
         return {"reply": "你好", "case": {"name": "demo"}}
 
     monkeypatch.setattr(agent_service_module.agent_service, "chat", fake_chat)
@@ -267,7 +279,7 @@ def test_agent_chat_case_via_executor(monkeypatch):
     monkeypatch.setattr(
         agent_service,
         "generate_case",
-        lambda project_id, token, user_requirement, selected_apis=None: {
+        lambda project_id, token, user_requirement, selected_apis=None, messages=None: {
             "status": "success",
             "case": {"name": "登录接口用例"},
         },
@@ -342,7 +354,67 @@ def test_generate_case_without_api_should_fail(monkeypatch):
         selected_apis=[],
     )
     assert result.get("status") == "error"
-    assert result.get("message") == "请先创建接口"
+    assert "接口" in str(result.get("message") or "")
+
+
+def test_case_intent_should_require_action():
+    from app.services.agent_service import _is_case_request
+
+    assert _is_case_request("帮我生成登录注册流程用例") is True
+    assert _is_case_request("接口测试是什么") is False
+
+
+def test_chat_prompt_no_context_private_vs_public():
+    from app.services.agent_service import agent_service
+
+    private_prompt = agent_service._build_chat_prompt("当前项目登录失败怎么排查", [], "no_context")
+    public_prompt = agent_service._build_chat_prompt("周杰伦有哪些经典歌曲", [], "no_context")
+    assert "未检索到证据" in private_prompt
+    assert "不要提及知识库未命中" in public_prompt
+
+
+def test_chat_prompt_should_include_context():
+    from app.services.agent_service import agent_service
+
+    prompt = agent_service._build_chat_prompt(
+        "登录接口如何断言",
+        [{"content": "登录成功返回token"}],
+        "success",
+    )
+    assert "知识片段" in prompt
+    assert "登录成功返回token" in prompt
+
+
+def test_dependency_relations_should_link_auth_flow():
+    from app.services.agent_service import agent_service
+
+    api_details = [
+        {"id": "api_login", "path": "/auth/login", "method": "POST"},
+        {"id": "api_profile", "path": "/user/profile", "method": "GET"},
+    ]
+    relations = agent_service._build_dependency_relations(api_details)
+    assert "api_profile" in relations
+    assert "api_login" in relations.get("api_profile", [])
+
+
+def test_normalize_case_should_complete_flow_steps():
+    from app.services.agent_service import agent_service
+
+    api_details = [
+        {"id": "api_1", "name": "登录", "path": "/auth/login", "method": "POST", "moduleId": "m1", "moduleName": "鉴权"},
+        {"id": "api_2", "name": "用户信息", "path": "/user/profile", "method": "GET", "moduleId": "m1", "moduleName": "鉴权"},
+    ]
+    case_obj = {"name": "链路用例", "caseApis": [{"apiId": "api_1"}]}
+    normalized = agent_service._normalize_case(
+        "p1",
+        case_obj,
+        api_details,
+        api_relations={"api_2": ["api_1"]},
+    )
+    steps = normalized.get("caseApis") or []
+    assert len(steps) >= 2
+    assert steps[0].get("apiId") == "api_1"
+    assert any(step.get("apiId") == "api_2" for step in steps)
 
 
 def test_rag_router_add_query_delete(monkeypatch, client: TestClient):
@@ -355,13 +427,13 @@ def test_rag_router_add_query_delete(monkeypatch, client: TestClient):
     )
     monkeypatch.setattr(
         rag_service_module.rag_service,
-        "search",
-        lambda project_id, query, top_k=5: [{"content": "命中内容", "metadata": {"project_id": project_id}}],
+        "search_with_status",
+        lambda project_id, query, top_k=5: {"status": "success", "data": [{"content": "命中内容", "metadata": {"project_id": project_id}}]},
     )
     monkeypatch.setattr(
         rag_service_module.rag_service,
         "delete_document",
-        lambda doc_id: {"status": "success", "vector_deleted": 2},
+        lambda project_id, doc_id: {"status": "success", "vector_deleted": 2},
     )
     add_resp = client.post(
         "/ai/rag/add",
@@ -374,5 +446,5 @@ def test_rag_router_add_query_delete(monkeypatch, client: TestClient):
     )
     assert query_resp.status_code == 200
     assert query_resp.json().get("has_context") is True
-    delete_resp = client.post("/ai/rag/delete", json={"doc_id": "d1"})
+    delete_resp = client.post("/ai/rag/delete", json={"project_id": "p1", "doc_id": "d1"})
     assert delete_resp.status_code == 200

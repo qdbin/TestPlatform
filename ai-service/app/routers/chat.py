@@ -25,18 +25,6 @@ class ChatResponse(BaseModel):
     content: str
 
 
-# 系统提示词
-SYSTEM_PROMPT = """你是一个专业的API测试助手，专注于帮助用户进行API测试。
-
-你可以：
-1. 回答关于API测试的问题
-2. 帮助用户理解接口文档
-3. 提供接口生成，测试用例设计及建议
-4. 解释测试结果和错误
-
-请用简洁、专业的语言回答问题。"""
-
-
 @router.post("/chat")
 async def chat(request: ChatRequest, raw_request: Request):
     """
@@ -49,6 +37,7 @@ async def chat(request: ChatRequest, raw_request: Request):
             token=token,
             message=request.message,
             use_rag=request.use_rag,
+            messages=request.messages or [],
         )
 
         return {

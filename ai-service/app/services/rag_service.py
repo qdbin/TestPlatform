@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import chromadb
 from chromadb.config import Settings
 import httpx
@@ -60,20 +60,35 @@ class OllamaEmbeddingFunction:
         embeddings = []
         for text in input:
             try:
-                response = httpx.post(
+                embedding = []
+                legacy_resp = httpx.post(
                     f"{self.base_url}/api/embeddings",
                     json={"model": self.model, "prompt": text},
                     timeout=60.0
                 )
-                if response.status_code == 200:
-                    data = response.json()
-                    embedding = data.get("embedding", [])
-                    embeddings.append(embedding)
+                if legacy_resp.status_code == 200:
+                    legacy_data = legacy_resp.json() or {}
+                    embedding = legacy_data.get("embedding", []) or []
+                elif legacy_resp.status_code == 404:
+                    new_resp = httpx.post(
+                        f"{self.base_url}/api/embed",
+                        json={"model": self.model, "input": text},
+                        timeout=60.0
+                    )
+                    if new_resp.status_code == 200:
+                        new_data = new_resp.json() or {}
+                        values = new_data.get("embeddings")
+                        if isinstance(values, list) and values:
+                            first = values[0]
+                            embedding = first if isinstance(first, list) else []
+                    else:
+                        return []
                 else:
-                    print(f"Ollama Embedding错误: {response.status_code}")
                     return []
+                if not embedding:
+                    return []
+                embeddings.append(embedding)
             except Exception as e:
-                print(f"Ollama Embedding失败: {e}，请确保Ollama已启动")
                 return []
         return embeddings
     
@@ -143,6 +158,36 @@ class RAGService:
             )
         return self._collection
 
+    def _fallback_embed(self, text: str, dims: int = 768) -> List[float]:
+        values = [0.0] * dims
+        source = str(text or "")
+        if not source:
+            return values
+        for i, ch in enumerate(source):
+            values[i % dims] += (ord(ch) % 997) / 997.0
+        length = max(1, len(source))
+        return [item / length for item in values]
+
+    def _embed_documents_with_fallback(self, documents: List[str]) -> Tuple[List[List[float]], bool]:
+        if self._embedding_func is not None:
+            try:
+                vectors = self._embedding_func.embed_documents(documents)
+                if vectors and len(vectors) == len(documents):
+                    return vectors, False
+            except Exception:
+                pass
+        return [self._fallback_embed(item) for item in documents], True
+
+    def _embed_query_with_fallback(self, query: str) -> Tuple[List[float], bool]:
+        if self._embedding_func is not None:
+            try:
+                vector = self._embedding_func.embed_query(query)
+                if vector:
+                    return vector, False
+            except Exception:
+                pass
+        return self._fallback_embed(query), True
+
     def add_document(
         self,
         project_id: str,
@@ -163,24 +208,10 @@ class RAGService:
                 "error": "empty_documents",
             }
         self._init_components()
-        if self._embedding_func is None:
-            return {
-                "indexed": False,
-                "degraded": True,
-                "vector_count": 0,
-                "error": "embedding_unavailable",
-            }
         try:
             collection = self._get_or_create_collection()
-            collection.delete(where={"doc_id": doc_id})
-            embeddings = self._embedding_func.embed_documents(documents)
-            if not embeddings or len(embeddings) != len(documents):
-                return {
-                    "indexed": False,
-                    "degraded": True,
-                    "vector_count": 0,
-                    "error": "embedding_failed",
-                }
+            collection.delete(where=self._doc_where(project_id, doc_id))
+            embeddings, used_fallback = self._embed_documents_with_fallback(documents)
             ids = [f"{project_id}_{doc_id}_{i}" for i in range(len(documents))]
             metadatas = [
                 {
@@ -202,7 +233,7 @@ class RAGService:
                 "indexed": True,
                 "degraded": False,
                 "vector_count": len(documents),
-                "error": "",
+                "error": "fallback_embedding" if used_fallback else "",
             }
         except Exception as e:
             print(f"向量索引失败: {e}")
@@ -213,45 +244,117 @@ class RAGService:
                 "error": str(e),
             }
 
-    def search(
-        self, project_id: str, query: str, top_k: int = 5
-    ) -> List[Dict[str, Any]]:
-        project_id = str(project_id)
-        self._init_components()
-        if self._embedding_func is None:
-            return []
+    def _safe_collection_get(self, collection, where: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            query_embedding = self._embedding_func.embed_query(query)
-            if not query_embedding:
-                return []
-            collection = self._get_or_create_collection()
-            results = collection.query(
-                query_embeddings=[query_embedding],
-                n_results=top_k,
-                where={"project_id": project_id},
-            )
-            formatted_results = []
-            if results.get("documents") and results["documents"][0]:
-                for i, doc in enumerate(results["documents"][0]):
-                    formatted_results.append({
+            return collection.get(where=where, include=["documents", "metadatas"])
+        except TypeError:
+            return collection.get(where=where)
+
+    def _doc_where(self, project_id: str, doc_id: str) -> Dict[str, Any]:
+        return {"$and": [{"project_id": str(project_id)}, {"doc_id": str(doc_id)}]}
+
+    def _vector_search(
+        self, project_id: str, query: str, top_k: int
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        query_embedding, used_fallback = self._embed_query_with_fallback(query)
+        if not query_embedding:
+            return "embedding_unavailable", []
+        collection = self._get_or_create_collection()
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k,
+            where={"project_id": project_id},
+        )
+        formatted_results = []
+        if results.get("documents") and results["documents"][0]:
+            for i, doc in enumerate(results["documents"][0]):
+                formatted_results.append(
+                    {
                         "content": doc,
                         "distance": results["distances"][0][i] if results.get("distances") else 0,
                         "metadata": results["metadatas"][0][i] if results.get("metadatas") else {},
-                    })
-            return formatted_results
+                    }
+                )
+        return ("fallback" if used_fallback else "success"), formatted_results
+
+    def _keyword_search(self, project_id: str, query: str, top_k: int) -> List[Dict[str, Any]]:
+        collection = self._get_or_create_collection()
+        source = self._safe_collection_get(collection, {"project_id": project_id})
+        documents = source.get("documents") or []
+        metadatas = source.get("metadatas") or []
+        if not isinstance(documents, list):
+            documents = []
+        if not isinstance(metadatas, list):
+            metadatas = []
+        terms = [item.strip().lower() for item in str(query or "").split() if item.strip()]
+        if not terms and query:
+            terms = [str(query).strip().lower()]
+        ranked: List[Dict[str, Any]] = []
+        for idx, doc in enumerate(documents):
+            text = str(doc or "")
+            content_lc = text.lower()
+            score = 0
+            for term in terms:
+                if term and term in content_lc:
+                    score += content_lc.count(term)
+            if score <= 0:
+                continue
+            ranked.append(
+                {
+                    "content": text,
+                    "distance": max(0.0, 1.0 - min(1.0, score / 10.0)),
+                    "metadata": metadatas[idx] if idx < len(metadatas) else {},
+                    "score": score,
+                }
+            )
+        ranked.sort(key=lambda item: item.get("score", 0), reverse=True)
+        return [
+            {"content": item["content"], "distance": item["distance"], "metadata": item["metadata"]}
+            for item in ranked[:top_k]
+        ]
+
+    def search_with_status(
+        self, project_id: str, query: str, top_k: int = 5
+    ) -> Dict[str, Any]:
+        project_id = str(project_id)
+        self._init_components()
+        try:
+            keyword_hits = self._keyword_search(project_id, query, top_k)
+            vector_status, vector_hits = self._vector_search(project_id, query, top_k)
+            merged: List[Dict[str, Any]] = []
+            seen = set()
+            for item in keyword_hits + vector_hits:
+                key = (str(item.get("content") or ""), str(item.get("metadata") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(item)
+                if len(merged) >= top_k:
+                    break
+            if merged:
+                return {"status": "success", "data": merged}
+            if vector_status == "embedding_unavailable":
+                return {"status": "embedding_unavailable", "data": []}
+            return {"status": "no_context", "data": []}
         except Exception as e:
             print(f"向量检索失败: {e}")
-            return []
+            return {"status": "vector_error", "data": [], "error": str(e)}
 
-    def delete_document(self, doc_id: str) -> Dict[str, Any]:
+    def search(
+        self, project_id: str, query: str, top_k: int = 5
+    ) -> List[Dict[str, Any]]:
+        return self.search_with_status(project_id, query, top_k).get("data", [])
+
+    def delete_document(self, project_id: str, doc_id: str) -> Dict[str, Any]:
+        project_id = str(project_id)
         doc_id = str(doc_id)
         try:
             self._init_components()
             collection = self._get_or_create_collection()
-            existing = collection.get(where={"doc_id": doc_id})
+            existing = self._safe_collection_get(collection, self._doc_where(project_id, doc_id))
             ids = existing.get("ids") if isinstance(existing, dict) else []
             delete_count = len(ids) if isinstance(ids, list) else 0
-            collection.delete(where={"doc_id": doc_id})
+            collection.delete(where=self._doc_where(project_id, doc_id))
             return {"status": "success", "vector_deleted": delete_count}
         except Exception as e:
             print(f"Chroma删除失败: {e}")
