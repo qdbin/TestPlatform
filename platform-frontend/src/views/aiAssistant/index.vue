@@ -1,5 +1,6 @@
 /**
- * AI助手页面
+ * AI助手页面 - 优化版本
+ * 修复流式输出和按钮状态问题
  */
 <template>
   <div class="ai-assistant">
@@ -107,15 +108,7 @@
               <div v-else>
                 <div
                   class="assistant-markdown"
-                  v-html="
-                    renderContent(
-                      msg.content ||
-                        (currentConversationLoading &&
-                        index === messages.length - 1
-                          ? '思考中...'
-                          : '')
-                    )
-                  "
+                  v-html="renderContent(msg.content || '')"
                 ></div>
 
                 <!-- 用例生成卡片 -->
@@ -224,14 +217,15 @@
           :rows="2"
           placeholder="请输入问题，按 Enter 发送，Shift+Enter 换行"
           @keydown.enter.native="handleEnter"
+          :disabled="isSending"
         >
         </el-input>
         <el-button
           type="primary"
-          :disabled="!inputMessage.trim() && !currentConversationLoading"
+          :disabled="!canSend"
           @click="handleSendAction"
         >
-          {{ currentConversationLoading ? "停止" : "发送" }}
+          {{ isSending ? "停止" : "发送" }}
         </el-button>
       </div>
     </div>
@@ -452,8 +446,11 @@ export default {
       inputMessage: "",
       messages: [],
       useRag: true,
-      loadingMap: {},
-      activeControllers: {},
+      
+      // 发送状态管理
+      isSending: false,
+      abortController: null,
+      currentStreamReader: null,
 
       // 知识库
       showKnowledgeDialog: false,
@@ -475,9 +472,12 @@ export default {
     };
   },
   computed: {
-    currentConversationLoading() {
-      if (!this.currentConversationId) return false;
-      return this.isConversationLoading(this.currentConversationId);
+    canSend() {
+      // 可以发送的条件：有输入内容且不在发送中，或者在发送中可以停止
+      if (this.isSending) {
+        return true; // 发送中可以点击停止
+      }
+      return this.inputMessage.trim().length > 0;
     },
     isKnowledgeReadonly() {
       return this.knowledgeDialogMode === "view";
@@ -496,12 +496,7 @@ export default {
     this.scheduleMermaidRender();
   },
   beforeDestroy() {
-    Object.keys(this.activeControllers).forEach((id) => {
-      const controller = this.activeControllers[id];
-      if (controller && typeof controller.abort === "function") {
-        controller.abort();
-      }
-    });
+    this.stopCurrentStream();
     if (this.mermaidRenderTimer) {
       clearTimeout(this.mermaidRenderTimer);
       this.mermaidRenderTimer = null;
@@ -515,6 +510,21 @@ export default {
     this.scheduleMermaidRender();
   },
   methods: {
+    // 停止当前流
+    stopCurrentStream() {
+      if (this.abortController) {
+        this.abortController.abort();
+        this.abortController = null;
+      }
+      if (this.currentStreamReader) {
+        try {
+          this.currentStreamReader.cancel();
+        } catch (e) {}
+        this.currentStreamReader = null;
+      }
+      this.isSending = false;
+    },
+
     openKnowledgeManage() {
       this.showKnowledgeManageDialog = true;
       this.loadKnowledgeList();
@@ -587,44 +597,6 @@ export default {
       return `${normalizedBase}${normalizedPath}`;
     },
 
-    getResponseData(res) {
-      if (!res || !res.data) return null;
-      let current = res.data;
-      if (Object.prototype.hasOwnProperty.call(current, "data")) {
-        current = current.data;
-      }
-      while (
-        current &&
-        typeof current === "object" &&
-        !Array.isArray(current) &&
-        Object.keys(current).length === 1 &&
-        Object.prototype.hasOwnProperty.call(current, "data")
-      ) {
-        current = current.data;
-      }
-      return current;
-    },
-
-    getResponseStatus(res) {
-      if (!res || !res.data || typeof res.data.status === "undefined") return 0;
-      return Number(res.data.status);
-    },
-
-    getResponseMessage(res) {
-      if (!res || !res.data) return "";
-      return String(res.data.message || res.data.msg || "");
-    },
-
-    assertRequestSuccess(res, fallbackMessage) {
-      const status = this.getResponseStatus(res);
-      if (status !== 0) {
-        throw new Error(
-          this.getResponseMessage(res) || fallbackMessage || "请求失败"
-        );
-      }
-      return this.getResponseData(res);
-    },
-
     getHistoryStorageKey() {
       const projectId = this.getCurrentProjectId();
       const userId = this.getCurrentUserId();
@@ -694,8 +666,6 @@ export default {
 
     loadConversations() {
       const key = this.getHistoryStorageKey();
-      this.loadingMap = {};
-      this.activeControllers = {};
       const raw = localStorage.getItem(key);
       if (!raw) {
         this.conversationList = [];
@@ -755,7 +725,7 @@ export default {
     // 选择会话（仅本地存储）
     selectConversation(conv) {
       this.currentConversationId = conv.id;
-      this.messages = Array.isArray(conv.messages) ? conv.messages : [];
+      this.messages = Array.isArray(conv.messages) ? [...conv.messages] : [];
       this.scrollToBottom();
       this.scheduleMermaidRender();
     },
@@ -763,7 +733,7 @@ export default {
     // 处理会话操作（仅本地存储）
     handleConvCommand(command, conv) {
       if (command === "delete") {
-        this.abortConversationRequest(conv.id);
+        this.stopCurrentStream();
         const next = this.conversationList.filter((c) => c.id !== conv.id);
         this.tryPersistHistory(next);
         this.conversationList = next;
@@ -772,34 +742,6 @@ export default {
           this.messages = [];
         }
       }
-    },
-
-    isConversationLoading(conversationId) {
-      return (
-        !!this.loadingMap[conversationId] &&
-        !!this.activeControllers[conversationId]
-      );
-    },
-
-    markConversationLoading(conversationId, loading) {
-      if (loading) {
-        this.$set(this.loadingMap, conversationId, true);
-      } else {
-        this.$delete(this.loadingMap, conversationId);
-      }
-    },
-
-    abortConversationRequest(conversationId) {
-      const controller = this.activeControllers[conversationId];
-      if (controller && typeof controller.abort === "function") {
-        controller.abort();
-      }
-      this.$delete(this.activeControllers, conversationId);
-      this.markConversationLoading(conversationId, false);
-    },
-
-    getConversationIndex(conversationId) {
-      return this.conversationList.findIndex((c) => c.id === conversationId);
     },
 
     updateConversationById(conversationId, messages) {
@@ -813,14 +755,14 @@ export default {
         return {
           ...c,
           title,
-          messages,
+          messages: [...messages],
           updateTime: Date.now(),
         };
       });
       this.tryPersistHistory(next);
       this.conversationList = next;
       if (this.currentConversationId === conversationId) {
-        this.messages = messages;
+        this.messages = [...messages];
       }
     },
 
@@ -853,21 +795,24 @@ export default {
       if (!this.currentConversationId) {
         this.createNewChat();
       }
+      
       const sendingConversationId = this.currentConversationId;
-      if (
-        !sendingConversationId ||
-        this.isConversationLoading(sendingConversationId)
-      )
+      if (this.isSending) {
+        this.$message.warning("请等待当前对话完成");
         return;
-      const conversationIndex = this.getConversationIndex(
-        sendingConversationId
+      }
+
+      const conversationIndex = this.conversationList.findIndex(
+        (c) => c.id === sendingConversationId
       );
       if (conversationIndex < 0) return;
+      
       const baseMessages = Array.isArray(
         this.conversationList[conversationIndex].messages
       )
         ? [...this.conversationList[conversationIndex].messages]
         : [];
+      
       const inputMsg = this.inputMessage;
       this.inputMessage = "";
 
@@ -883,9 +828,11 @@ export default {
       };
       const sendingMessages = [...baseMessages, userMsg, assistantMsg];
       this.updateConversationById(sendingConversationId, sendingMessages);
-      this.markConversationLoading(sendingConversationId, true);
-      const controller = new AbortController();
-      this.$set(this.activeControllers, sendingConversationId, controller);
+      
+      // 设置发送状态
+      this.isSending = true;
+      this.abortController = new AbortController();
+      
       this.scrollToBottom();
 
       try {
@@ -893,7 +840,7 @@ export default {
           this.buildApiUrl("/autotest/ai/chat/stream"),
           {
             method: "POST",
-            signal: controller.signal,
+            signal: this.abortController.signal,
             headers: {
               "Content-Type": "application/json",
               token: localStorage.getItem("token"),
@@ -910,17 +857,20 @@ export default {
         if (!response.ok || !response.body) {
           throw new Error(`网络异常或服务错误（HTTP ${response.status}）`);
         }
+        
         const contentType = String(response.headers.get("content-type") || "");
         if (!contentType.includes("text/event-stream")) {
           throw new Error("AI服务未返回SSE流，请检查后端流式配置");
         }
 
         const reader = response.body.getReader();
+        this.currentStreamReader = reader;
         const decoder = new TextDecoder();
         let sseBuffer = "";
         let reachEnd = false;
         let lastEventAt = Date.now();
         const idleTimeoutMs = 120000;
+        
         const readWithTimeout = () =>
           Promise.race([
             reader.read(),
@@ -948,13 +898,16 @@ export default {
           } catch (e) {
             throw e;
           }
+          
           if (done) {
             break;
           }
+          
           const text = decoder
             .decode(value, { stream: true })
             .replace(/\r\n/g, "\n");
           sseBuffer += text;
+          
           let eventEnd = sseBuffer.indexOf("\n\n");
           while (eventEnd !== -1) {
             const rawEvent = sseBuffer.slice(0, eventEnd);
@@ -965,6 +918,7 @@ export default {
               .map((line) => line.replace(/^data:\s*/, ""))
               .join("\n")
               .trim();
+              
             if (payload) {
               let data = null;
               try {
@@ -972,35 +926,41 @@ export default {
               } catch (e) {
                 data = null;
               }
+              
               if (!data) {
                 eventEnd = sseBuffer.indexOf("\n\n");
                 continue;
               }
+              
               if (data.type === "content" && data.delta) {
                 lastEventAt = Date.now();
-                sendingMessages[sendingMessages.length - 1].content +=
-                  data.delta;
-                if (this.currentConversationId === sendingConversationId) {
-                  this.messages = sendingMessages;
+                // 只更新最后一个消息的内容，不替换整个数组
+                const lastMsg = sendingMessages[sendingMessages.length - 1];
+                if (lastMsg && lastMsg.role === "assistant") {
+                  lastMsg.content += data.delta;
+                  // 触发响应式更新
+                  this.$set(this.messages, this.messages.length - 1, {
+                    ...lastMsg,
+                  });
                   this.scrollToBottom();
-                  this.scheduleMermaidRender();
                 }
               } else if (data.type === "case" && data.case) {
                 lastEventAt = Date.now();
-                const currentMsg = sendingMessages[sendingMessages.length - 1];
-                currentMsg.caseData = data.case;
-                const apiIds = []
-                  .concat(Array.isArray(data.api_ids) ? data.api_ids : [])
-                  .concat(
-                    Array.isArray(data.created_api_ids)
-                      ? data.created_api_ids
-                      : []
-                  )
-                  .filter(Boolean);
-                currentMsg.apiIds = Array.from(new Set(apiIds));
-                if (this.currentConversationId === sendingConversationId) {
-                  this.messages = sendingMessages;
-                  this.scrollToBottom();
+                const lastMsg = sendingMessages[sendingMessages.length - 1];
+                if (lastMsg) {
+                  lastMsg.caseData = data.case;
+                  const apiIds = []
+                    .concat(Array.isArray(data.api_ids) ? data.api_ids : [])
+                    .concat(
+                      Array.isArray(data.created_api_ids)
+                        ? data.created_api_ids
+                        : []
+                    )
+                    .filter(Boolean);
+                  lastMsg.apiIds = Array.from(new Set(apiIds));
+                  this.$set(this.messages, this.messages.length - 1, {
+                    ...lastMsg,
+                  });
                 }
               } else if (data.type === "error") {
                 throw new Error(data.message || "AI服务错误");
@@ -1012,10 +972,13 @@ export default {
             }
             eventEnd = sseBuffer.indexOf("\n\n");
           }
+          
           if (reachEnd) {
             break;
           }
         }
+        
+        // 保存最终消息
         this.updateConversationById(sendingConversationId, sendingMessages);
       } catch (error) {
         if (error && error.name === "AbortError") {
@@ -1035,18 +998,13 @@ export default {
             time: Date.now(),
           });
           this.updateConversationById(sendingConversationId, sendingMessages);
-          this.scheduleMermaidRender();
-          this.$message.error(
-            "AI服务调用失败：" + (error.message || "未知错误")
-          );
+          this.$message.error("AI服务调用失败：" + (error.message || "未知错误"));
         }
       } finally {
-        this.markConversationLoading(sendingConversationId, false);
-        this.$delete(this.activeControllers, sendingConversationId);
-        this.$forceUpdate();
-        if (this.currentConversationId === sendingConversationId) {
-          this.scrollToBottom();
-        }
+        this.isSending = false;
+        this.abortController = null;
+        this.currentStreamReader = null;
+        this.scrollToBottom();
         this.scheduleMermaidRender();
       }
     },
@@ -1066,6 +1024,7 @@ export default {
     },
 
     resetLocalHistory() {
+      this.stopCurrentStream();
       const key = this.getHistoryStorageKey();
       localStorage.removeItem(key);
       this.conversationList = [];
@@ -1081,6 +1040,7 @@ export default {
         this.$message.warning("当前为只读模式，请先重置或导出后再操作");
         return;
       }
+      this.stopCurrentStream();
       const next = [];
       if (!this.tryPersistHistory(next)) return;
       this.conversationList = [];
@@ -1098,8 +1058,9 @@ export default {
     },
 
     handleSendAction() {
-      if (this.currentConversationLoading && this.currentConversationId) {
-        this.abortConversationRequest(this.currentConversationId);
+      if (this.isSending) {
+        // 停止当前流
+        this.stopCurrentStream();
         this.$message.info("已停止生成");
         return;
       }
@@ -1237,6 +1198,24 @@ export default {
       }
       this.knowledgeList = [];
       this.knowledgeTreeData = [];
+    },
+
+    getResponseData(res) {
+      if (!res || !res.data) return null;
+      let current = res.data;
+      if (Object.prototype.hasOwnProperty.call(current, "data")) {
+        current = current.data;
+      }
+      while (
+        current &&
+        typeof current === "object" &&
+        !Array.isArray(current) &&
+        Object.keys(current).length === 1 &&
+        Object.prototype.hasOwnProperty.call(current, "data")
+      ) {
+        current = current.data;
+      }
+      return current;
     },
 
     buildKnowledgeTree(list) {
@@ -1385,7 +1364,12 @@ export default {
         sourceType: "manual",
         updateUser: userId,
       });
-      const knowledgeId = this.assertRequestSuccess(saveRes, "保存知识库失败");
+      
+      const knowledgeId = this.getResponseData(saveRes);
+      if (knowledgeId === null || knowledgeId === undefined) {
+        this.$message.error("保存知识库失败");
+        return;
+      }
 
       if (
         typeof knowledgeId === "string" &&
@@ -1396,8 +1380,7 @@ export default {
           const indexRes = await this.$post(
             `/autotest/ai/knowledge/index/${knowledgeId}?projectId=${projectId}`
           );
-          const indexData =
-            this.assertRequestSuccess(indexRes, "索引失败") || {};
+          const indexData = this.getResponseData(indexRes);
           if (indexData && indexData.indexedStatus === "degraded") {
             this.$message.warning(
               "保存成功，但索引降级失败，请检查Embedding配置"
@@ -1444,7 +1427,11 @@ export default {
       const res = await this.$post(
         `/autotest/ai/knowledge/index/${kb.id}?projectId=${projectId}`
       );
-      this.assertRequestSuccess(res, "索引失败");
+      const result = this.getResponseData(res);
+      if (result === null || result === undefined) {
+        this.$message.error("索引失败");
+        return;
+      }
       this.$message.success("索引提交成功");
       this.loadKnowledgeList();
     },
@@ -1455,7 +1442,11 @@ export default {
       const res = await this.$delete(
         `/autotest/ai/knowledge/${kb.id}?projectId=${projectId}`
       );
-      this.assertRequestSuccess(res, "删除失败");
+      const result = this.getResponseData(res);
+      if (result === null || result === undefined) {
+        this.$message.error("删除失败");
+        return;
+      }
       this.$message.success("删除成功");
       this.loadKnowledgeList();
     },
@@ -1510,7 +1501,11 @@ export default {
       const res = await this.$post("/autotest/ai/generate/case/save", {
         case: msg.caseData,
       });
-      this.assertRequestSuccess(res, "用例保存失败");
+      const result = this.getResponseData(res);
+      if (result === null || result === undefined) {
+        this.$message.error("用例保存失败");
+        return;
+      }
       this.$message.success("保存成功");
     },
 

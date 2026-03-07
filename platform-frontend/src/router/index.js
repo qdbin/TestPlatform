@@ -91,12 +91,6 @@ const userManage= () => import('@/views/system/user');
 // AI助手
 const AIAssistant= () => import('@/views/aiAssistant/index');
 
-/**
- * 临时测试组件-可删
- */
-const TmpTest = () => import('@/views/tmp/tmp');
-
-
 // 启用路由功能
 Vue.use(Router);
 

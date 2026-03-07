@@ -5,6 +5,7 @@ LLM服务模块
 
 from typing import Optional, Dict, Any, List, Iterator
 import os
+
 os.environ.pop("OPENAI_PROXY", None)
 try:
     from langchain_openai import ChatOpenAI
@@ -108,7 +109,7 @@ class LLMService:
         def stream_generator():
             try:
                 for chunk in llm.stream(langchain_messages):
-                    if hasattr(chunk, 'content') and chunk.content:
+                    if hasattr(chunk, "content") and chunk.content:
                         yield chunk.content
             except Exception as e:
                 print(f"流式生成错误: {e}")
