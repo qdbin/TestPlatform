@@ -35,11 +35,8 @@
     </select>
 
     <select id="countChildren" resultType="java.lang.Integer">
-        SELECT COUNT(1)
-        FROM ai_knowledge
-        WHERE project_id = #{projectId}
-          AND parent_id = #{parentId}
-          AND status != 'deleted'
+        SELECT COUNT(1) FROM ai_knowledge
+        WHERE project_id = #{projectId} AND parent_id = #{parentId} AND status != 'deleted'
     </select>
 
 </mapper>

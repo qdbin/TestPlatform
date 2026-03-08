@@ -220,7 +220,6 @@ class AiControllerTest {
         messages.add(m);
         req.setMessages(messages);
 
-        controller.generateCase(req, "tok", request);
         ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
         verify(aiService).generateCase(captor.capture(), eq("tok"));
         assertEquals(messages, captor.getValue().get("messages"));

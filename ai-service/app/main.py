@@ -14,7 +14,7 @@ from app.routers import chat, knowledge, agent
 # 创建FastAPI应用py
 app = FastAPI(
     title="AI智能测试助手服务",
-    description="为流马测试平台提供AI对话、知识库管理和用例生成功能",
+    description="为测试平台提供AI对话、Rag智能问答和用例生成功能",
     version="1.0.0",
 )
 

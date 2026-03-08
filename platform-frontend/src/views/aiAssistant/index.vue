@@ -427,7 +427,7 @@
   </div>
 </template>
 
-<script>
+    <script>
 import MarkdownIt from "markdown-it";
 import mermaid from "mermaid";
 
@@ -1562,7 +1562,7 @@ export default {
 };
 </script>
 
-<style scoped>
+    <style scoped>
 .ai-assistant {
   display: flex;
   height: calc(100vh - 84px);

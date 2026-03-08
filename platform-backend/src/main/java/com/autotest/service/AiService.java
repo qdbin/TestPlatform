@@ -81,10 +81,6 @@ public class AiService {
         return response.getBody();
     }
 
-    private void deleteFromAiService(String path) {
-        restTemplate.exchange(aiServiceBaseUrl + path, HttpMethod.DELETE, null, Map.class);
-    }
-
     // ==================== 知识库管理 ====================
 
     /**
@@ -248,12 +244,12 @@ public class AiService {
         }
         HttpEntity<Object> entity = new HttpEntity<>(request, headers);
         long streamStart = System.currentTimeMillis();
-        final long[] firstEventAt = {0L};
-        final int[] eventCount = {0};
+        final long[] firstEventAt = { 0L };
+        final int[] eventCount = { 0 };
 
         try {
             restTemplate.execute(
-                aiServiceBaseUrl + "/ai/chat/stream",
+                    aiServiceBaseUrl + "/ai/chat/stream",
                     HttpMethod.POST,
                     restTemplate.httpEntityCallback(entity),
                     response -> {

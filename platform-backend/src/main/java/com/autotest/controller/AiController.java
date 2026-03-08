@@ -269,7 +269,7 @@ public class AiController {
     // ==================== AI对话 ====================
 
     /**
-     * 十一、AI对话（SSE流式）
+     * AI对话（SSE流式）
      */
     @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chatStream(@RequestBody AiChatStreamRequest request,
@@ -313,39 +313,8 @@ public class AiController {
         return emitter;
     }
 
-    // ==================== 用例生成 ====================
-
     /**
-     * 十二、生成测试用例
-     */
-    @PostMapping("/generate/case")
-    public Map<String, Object> generateCase(@RequestBody AiGenerateCaseRequest request,
-            @RequestHeader(value = "token", required = false) String token,
-            HttpServletRequest httpServletRequest) {
-        String projectId = request.getProjectId();
-        assertProjectAccess(httpServletRequest, projectId);
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("project_id", projectId);
-        payload.put("user_requirement", request.getUserRequirement());
-        payload.put("selected_apis", request.getSelectedApis());
-        payload.put("messages", request.getMessages());
-        return aiService.generateCase(payload, token);
-    }
-
-    @GetMapping("/agent/api-list/{projectId}")
-    public Map<String, Object> getAgentApiList(@PathVariable String projectId,
-            @RequestHeader(value = "token", required = false) String token,
-            HttpServletRequest httpServletRequest) {
-        /**
-         * Agent调度辅助接口：
-         * 给前端“选择接口”场景提供当前项目完整接口清单。
-         */
-        assertProjectAccess(httpServletRequest, projectId);
-        return aiService.getAgentApiList(projectId, token);
-    }
-
-    /**
-     * 十三、保存生成的用例
+     * 保存生成的用例
      */
     @PostMapping("/generate/case/save")
     public Map<String, Object> saveGeneratedCase(@RequestBody Map<String, Object> request,
