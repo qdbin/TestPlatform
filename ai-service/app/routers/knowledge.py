@@ -8,6 +8,11 @@ router = APIRouter()
 
 
 class RagAddRequest(BaseModel):
+    """
+    知识文档入库请求。
+    Schema示例：
+    {"project_id":"p1","doc_id":"d1","doc_type":"manual","doc_name":"登录文档","content":"..."}
+    """
     project_id: str
     doc_id: str
     doc_type: str
@@ -16,6 +21,7 @@ class RagAddRequest(BaseModel):
 
 
 class RagQueryRequest(BaseModel):
+    """知识检索请求。messages预留给后续多轮检索增强。"""
     project_id: str
     question: str
     top_k: int = 5
@@ -29,7 +35,9 @@ class RagDeleteRequest(BaseModel):
 
 @router.post("/add")
 async def add_document(request: RagAddRequest):
+    """新增/重建知识文档索引。先切片再写入向量库。"""
     try:
+        # 分片策略：较大chunk + 小重叠，兼顾召回与上下文完整性。
         chunks = chunk_text(request.content, chunk_size=1200, overlap=80)
         if not chunks:
             return {
@@ -53,6 +61,7 @@ async def add_document(request: RagAddRequest):
 
 @router.post("/delete")
 async def delete_document(request: RagDeleteRequest):
+    """删除知识文档对应向量分片。"""
     try:
         result = rag_service.delete_document(request.project_id, request.doc_id)
         if result.get("status") != "success":
@@ -66,6 +75,10 @@ async def delete_document(request: RagDeleteRequest):
 
 @router.post("/query")
 async def query_knowledge(request: RagQueryRequest):
+    """
+    查询知识库并返回上下文答案。
+    返回中的 rag_status 用于前端区分无结果/服务异常等状态。
+    """
     try:
         search_result = rag_service.search_with_status(
             project_id=request.project_id,
@@ -104,6 +117,7 @@ async def query_knowledge(request: RagQueryRequest):
 
 @router.get("/stats/{project_id}")
 async def get_stats(project_id: str):
+    """获取项目维度知识库统计（分片数量等）。"""
     try:
         stats = rag_service.get_collection_stats(project_id)
         return {"status": "success", "data": stats}

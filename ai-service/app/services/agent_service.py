@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
@@ -21,6 +23,8 @@ except Exception:
 from app.services.llm_service import llm_service
 from app.services.rag_service import rag_service
 from app.tools.platform_tools import get_platform_client
+
+logger = logging.getLogger("uvicorn.error")
 
 ASSISTANT_ROLE_PROMPT = """你是接口自动化测试平台的AI智能助手，专注于帮助用户进行接口测试和用例设计。
 
@@ -48,6 +52,12 @@ ASSISTANT_ROLE_PROMPT = """你是接口自动化测试平台的AI智能助手，
 - 无相关接口时：明确告知"当前项目未找到相关接口"
 - 知识库无结果：说明"未检索到相关文档"，再给通用建议
 - 格式错误：自动重试一次，失败则返回明确错误"""
+
+CHAT_ROLE_PROMPT = """你是接口测试助手。
+要求：
+1. 直接回答，先给结论再给要点；
+2. 避免冗长铺垫，优先短句；
+3. 不确定时明确说明不确定。"""
 
 
 class CaseApiStepModel(BaseModel):
@@ -174,6 +184,8 @@ def _is_project_private_query(message: str) -> bool:
 
 
 class AgentService:
+    """AI助手核心服务，负责问答、用例生成与流式事件编排。"""
+
     def _extract_path_tokens(self, api_item: Dict[str, Any]) -> Set[str]:
         path = str(api_item.get("path") or api_item.get("url") or "").lower()
         raw_tokens = re.split(r"[/_\-\{\}\.\s]+", path)
@@ -373,6 +385,13 @@ class AgentService:
         user_requirement: str,
         all_apis: List[Dict[str, Any]],
     ) -> List[str]:
+        """
+        Agent调度入口：根据用户需求从项目接口池中选择候选api_id。
+        调度策略：
+        1) 优先调用ReAct工具链做语义筛选；
+        2) 失败时回退关键词打分；
+        3) 流程类需求至少补足多接口链路。
+        """
         if not all_apis:
             return []
         query = user_requirement.lower()
@@ -463,6 +482,10 @@ class AgentService:
         schema_payload: Dict[str, Any],
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
+        """
+        组装用例生成Prompt。
+        将接口清单、依赖关系、知识片段与后端Schema压入上下文，约束模型只输出可保存JSON。
+        """
         history_text = "\n".join(
             [
                 f"{item.get('role')}: {item.get('content')}"
@@ -710,6 +733,10 @@ class AgentService:
         selected_apis: Optional[List[str]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ):
+        """
+        用例生成主流程。
+        步骤：拉取接口池 -> 选择候选接口 -> 读取接口详情/关系 -> 融合RAG与Schema -> 生成并校验CaseRequest。
+        """
         platform_client = get_platform_client(token)
         all_apis = platform_client.get_api_list(project_id) or []
         if not all_apis:
@@ -769,6 +796,7 @@ class AgentService:
             messages=messages,
         )
         last_error = ""
+        # 最多两轮：首轮生成，失败后附带错误原因进行修正重试。
         for attempt in range(2):
             raw = llm_service.chat(
                 [{"role": "user", "content": prompt}],
@@ -820,6 +848,10 @@ class AgentService:
         use_rag: bool,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
+        """
+        非流式聊天入口。
+        自动分流：若识别为“用例需求”则走Agent生成流程，否则走RAG增强问答流程。
+        """
         msg = (message or "").strip()
         if not msg:
             return {"reply": "请先输入问题"}
@@ -842,7 +874,7 @@ class AgentService:
         prompt = self._build_chat_prompt(msg, docs, rag_status)
         chat_messages = _normalize_messages(messages)
         chat_messages.append({"role": "user", "content": prompt})
-        reply = llm_service.chat(chat_messages, system_prompt=ASSISTANT_ROLE_PROMPT)
+        reply = llm_service.chat(chat_messages, system_prompt=CHAT_ROLE_PROMPT)
         return {"reply": reply}
 
     def stream_chat(
@@ -853,6 +885,12 @@ class AgentService:
         use_rag: bool,
         messages: Optional[List[Dict[str, Any]]] = None,
     ):
+        """
+        SSE流式对话生成器。
+        事件协议：
+        - {"type": "content", "delta": "..."} 增量文本
+        - {"type": "case", "case": {...}, "api_ids": [...]} 用例草稿
+        """
         msg = (message or "").strip()
         if not msg:
             yield {"type": "content", "delta": "请先输入问题"}
@@ -863,6 +901,7 @@ class AgentService:
             )
             if result.get("status") == "success":
                 reply = "已生成用例预览，请在预览区确认并手动保存。"
+                # 用例场景仍保持逐字符输出，便于前端复用统一渲染路径。
                 for char in reply:
                     yield {"type": "content", "delta": char}
                 yield {
@@ -885,18 +924,50 @@ class AgentService:
         chat_messages.append({"role": "user", "content": final_prompt})
 
         has_output = False
+        # 记录链路时序，便于区分“首包慢”与“中途阻塞”。
+        stream_start = time.time()
+        first_output_at = 0.0
+        event_count = 0
+        logger.info(
+            "[AI_STREAM] start project_id=%s use_rag=%s", str(project_id), str(use_rag)
+        )
         try:
             for delta in llm_service.chat_with_stream(
-                chat_messages, system_prompt=ASSISTANT_ROLE_PROMPT
+                chat_messages, system_prompt=CHAT_ROLE_PROMPT
             ):
                 if delta:
+                    now = time.time()
+                    if not first_output_at:
+                        first_output_at = now
+                        logger.info(
+                            "[AI_STREAM] first_delta_delay=%.3fs project_id=%s",
+                            first_output_at - stream_start,
+                            str(project_id),
+                        )
                     has_output = True
+                    event_count += 1
+                    # 直通转发：拿到一个chunk就产出一个delta，不做服务内聚合。
                     yield {"type": "content", "delta": delta}
+                    if event_count % 20 == 0:
+                        logger.info(
+                            "[AI_STREAM] progress events=%d elapsed=%.3fs",
+                            event_count,
+                            time.time() - stream_start,
+                        )
+            logger.info(
+                "[AI_STREAM] end project_id=%s events=%d duration=%.3fs",
+                str(project_id),
+                event_count,
+                time.time() - stream_start,
+            )
         except Exception as e:
-            print(f"流式输出异常: {e}")
+            logger.exception(
+                "[AI_STREAM] error project_id=%s detail=%s", str(project_id), str(e)
+            )
             if not has_output:
+                # 兜底策略：上游流式失败时退化为一次性回答并按固定步长切片。
                 fallback = llm_service.chat(
-                    chat_messages, system_prompt=ASSISTANT_ROLE_PROMPT
+                    chat_messages, system_prompt=CHAT_ROLE_PROMPT
                 )
                 if fallback:
                     text = str(fallback)
@@ -907,6 +978,7 @@ class AgentService:
     def get_api_list_for_selection(
         self, project_id: str, token: str
     ) -> List[Dict[str, Any]]:
+        """给前端“选择接口”弹窗提供当前项目接口列表。"""
         return get_platform_client(token).get_api_list(project_id)
 
 

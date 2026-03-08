@@ -10,6 +10,8 @@ import com.autotest.request.CaseApiRequest;
 import com.autotest.request.CaseRequest;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -34,6 +36,7 @@ import java.util.*;
 @Service
 @Transactional(rollbackFor = Exception.class)
 public class AiService {
+    private static final Logger log = LoggerFactory.getLogger(AiService.class);
 
     @Resource
     private AiKnowledgeMapper aiKnowledgeMapper;
@@ -165,6 +168,8 @@ public class AiService {
             throw new LMException("目录不支持索引");
         }
         try {
+            // 索引请求Schema示例：
+            // {"doc_id":"d1","project_id":"p1","doc_type":"manual","doc_name":"登录规范","content":"..."}
             Map<String, Object> params = new HashMap<>();
             params.put("doc_id", knowledge.getId());
             params.put("project_id", knowledge.getProjectId());
@@ -176,6 +181,7 @@ public class AiService {
             boolean degraded = indexResult != null && Boolean.TRUE.equals(indexResult.get("degraded"));
             String indexError = indexResult == null ? "" : String.valueOf(indexResult.getOrDefault("error", ""));
             if (indexed && "fallback_embedding".equals(indexError)) {
+                // AI侧使用降级向量时，业务可用但质量下降，标记为degraded以便前端提示。
                 degraded = true;
             }
 
@@ -230,6 +236,10 @@ public class AiService {
         }
     }
 
+    /**
+     * 流式对话转发：
+     * 读取AI服务SSE事件并原样转发给前端，维持 content/case/error/end 事件协议。
+     */
     public void streamChat(Map<String, Object> request, String token, SseEmitter emitter) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -237,10 +247,13 @@ public class AiService {
             headers.add("token", token);
         }
         HttpEntity<Object> entity = new HttpEntity<>(request, headers);
+        long streamStart = System.currentTimeMillis();
+        final long[] firstEventAt = { 0L };
+        final int[] eventCount = { 0 };
 
         try {
             restTemplate.execute(
-                aiServiceBaseUrl + "/ai/chat/stream",
+                    aiServiceBaseUrl + "/ai/chat/stream",
                     HttpMethod.POST,
                     restTemplate.httpEntityCallback(entity),
                     response -> {
@@ -248,6 +261,7 @@ public class AiService {
                                 new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
                             String line;
                             while ((line = reader.readLine()) != null) {
+                                // 仅处理SSE数据行，忽略注释/空行。
                                 if (!line.startsWith("data:")) {
                                     continue;
                                 }
@@ -255,10 +269,22 @@ public class AiService {
                                 if (payload.isEmpty()) {
                                     continue;
                                 }
+                                // 每个data块按JSON事件解析，保持事件边界不被重组。
                                 Map<String, Object> event = objectMapper.readValue(
                                         payload,
                                         new TypeReference<Map<String, Object>>() {
                                         });
+                                long now = System.currentTimeMillis();
+                                eventCount[0] += 1;
+                                if (firstEventAt[0] == 0L) {
+                                    firstEventAt[0] = now;
+                                    log.info("AI流式首包到达 delay={}ms", firstEventAt[0] - streamStart);
+                                }
+                                if (eventCount[0] % 20 == 0 || "end".equals(String.valueOf(event.get("type")))) {
+                                    log.info("AI流式转发进度 events={} elapsed={}ms type={}",
+                                            eventCount[0], now - streamStart, String.valueOf(event.get("type")));
+                                }
+                                // 直通发送给前端，避免后端层再做拼接缓存。
                                 emitter.send(SseEmitter.event().data(event));
                                 if ("end".equals(String.valueOf(event.get("type")))) {
                                     break;
@@ -267,8 +293,10 @@ public class AiService {
                         }
                         return null;
                     });
+            log.info("AI流式转发完成 events={} total={}ms", eventCount[0], System.currentTimeMillis() - streamStart);
             emitter.complete();
         } catch (Exception e) {
+            log.error("AI流式转发失败 total={}ms error={}", System.currentTimeMillis() - streamStart, e.getMessage(), e);
             try {
                 Map<String, Object> errorPayload = new HashMap<>();
                 errorPayload.put("type", "error");
@@ -291,6 +319,10 @@ public class AiService {
         }
     }
 
+    /**
+     * Agent调度辅助接口。
+     * 将项目接口列表透传给ai-service，供其进行接口选择与链路编排。
+     */
     public Map<String, Object> getAgentApiList(String projectId, String token) {
         try {
             return getFromAiService("/ai/agent/api-list/" + projectId, token, Map.class);
@@ -299,6 +331,9 @@ public class AiService {
         }
     }
 
+    /**
+     * 保存AI草稿前校验步骤引用的apiId必须属于当前项目。
+     */
     public void validateCaseApiIds(String projectId, CaseRequest caseRequest) {
         if (caseRequest == null || caseRequest.getCaseApis() == null || caseRequest.getCaseApis().isEmpty()) {
             throw new LMException("请先创建接口");

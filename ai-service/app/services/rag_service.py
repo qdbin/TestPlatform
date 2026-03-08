@@ -110,6 +110,8 @@ class OllamaEmbeddingFunction:
 
 
 class RAGService:
+    """RAG核心服务：负责知识分片向量化、索引写入、混合检索与状态回传。"""
+
     def __init__(self):
         self._embedding_func = None
         self._client = None
@@ -122,6 +124,7 @@ class RAGService:
             provider = config.get("embedding.provider", "ollama")
 
             if provider == "openai":
+                # OpenAI兼容模式，适配官方与兼容网关。
                 try:
                     api_key = config.get("embedding.openai_api_key", "")
                     base_url = config.get(
@@ -144,6 +147,7 @@ class RAGService:
                     self._embedding_func = None
                     self._embedding_init_failed = True
             elif provider == "ollama":
+                # Ollama本地模式，适合离线或低成本部署。
                 try:
                     ollama_url = config.get(
                         "embedding.ollama_url", "http://localhost:11434"
@@ -194,6 +198,10 @@ class RAGService:
     def _embed_documents_with_fallback(
         self, documents: List[str]
     ) -> Tuple[List[List[float]], bool]:
+        """
+        文档向量化（含降级）。
+        返回值: (embeddings, used_fallback)
+        """
         if self._embedding_func is not None:
             try:
                 vectors = self._embedding_func.embed_documents(documents)
@@ -204,6 +212,7 @@ class RAGService:
         return [self._fallback_embed(item) for item in documents], True
 
     def _embed_query_with_fallback(self, query: str) -> Tuple[List[float], bool]:
+        """查询向量化（含降级），用于在线检索阶段。"""
         if self._embedding_func is not None:
             try:
                 vector = self._embedding_func.embed_query(query)
@@ -231,6 +240,12 @@ class RAGService:
         doc_name: str,
         documents: List[str],
     ) -> Dict[str, Any]:
+        """
+        写入知识文档分片到向量库。
+        Schema示例：
+        - metadata: {"project_id":"p1","doc_id":"d1","doc_type":"manual","doc_name":"登录规范","chunk_index":0}
+        - id: "p1_d1_0"
+        """
         project_id = str(project_id)
         doc_id = str(doc_id)
         doc_type = str(doc_type or "manual")
@@ -257,6 +272,7 @@ class RAGService:
         self._init_components()
         try:
             collection = self._get_or_create_collection()
+            # 先删后写，保证同一doc_id重建索引时不会残留旧分片。
             collection.delete(where=self._doc_where(project_id, doc_id))
             embeddings, used_fallback = self._embed_documents_with_fallback(
                 normalized_docs
@@ -305,6 +321,13 @@ class RAGService:
     def _vector_search(
         self, project_id: str, query: str, top_k: int
     ) -> Tuple[str, List[Dict[str, Any]]]:
+        """
+        纯向量检索。
+        返回值status:
+        - success: 正常Embedding检索
+        - fallback: 使用降级Embedding检索
+        - embedding_unavailable: 无可用向量
+        """
         query_embedding, used_fallback = self._embed_query_with_fallback(query)
         if not query_embedding:
             return "embedding_unavailable", []
@@ -395,6 +418,11 @@ class RAGService:
     def search_with_status(
         self, project_id: str, query: str, top_k: int = 5
     ) -> Dict[str, Any]:
+        """
+        混合检索总入口：关键词检索 + 向量检索去重融合。
+        状态语义：
+        - success/no_context/embedding_unavailable/vector_error
+        """
         project_id = str(project_id)
         self._init_components()
         try:
@@ -425,6 +453,7 @@ class RAGService:
         return self.search_with_status(project_id, query, top_k).get("data", [])
 
     def delete_document(self, project_id: str, doc_id: str) -> Dict[str, Any]:
+        """按(project_id, doc_id)删除所有向量分片，并返回删除数量。"""
         project_id = str(project_id)
         doc_id = str(doc_id)
         try:

@@ -446,7 +446,7 @@ export default {
       inputMessage: "",
       messages: [],
       useRag: true,
-      
+
       // 发送状态管理
       isSending: false,
       abortController: null,
@@ -510,7 +510,10 @@ export default {
     this.scheduleMermaidRender();
   },
   methods: {
-    // 停止当前流
+    /**
+     * 停止当前流式会话。
+     * 双保险：同时中断 fetch 与 ReadableStream reader。
+     */
     stopCurrentStream() {
       if (this.abortController) {
         this.abortController.abort();
@@ -783,6 +786,10 @@ export default {
         }));
     },
 
+    /**
+     * 发送消息并消费SSE流。
+     * 事件协议：content/case/error/end
+     */
     async sendMessage() {
       if (!this.inputMessage.trim()) return;
 
@@ -795,7 +802,7 @@ export default {
       if (!this.currentConversationId) {
         this.createNewChat();
       }
-      
+
       const sendingConversationId = this.currentConversationId;
       if (this.isSending) {
         this.$message.warning("请等待当前对话完成");
@@ -806,13 +813,13 @@ export default {
         (c) => c.id === sendingConversationId
       );
       if (conversationIndex < 0) return;
-      
+
       const baseMessages = Array.isArray(
         this.conversationList[conversationIndex].messages
       )
         ? [...this.conversationList[conversationIndex].messages]
         : [];
-      
+
       const inputMsg = this.inputMessage;
       this.inputMessage = "";
 
@@ -828,14 +835,18 @@ export default {
       };
       const sendingMessages = [...baseMessages, userMsg, assistantMsg];
       this.updateConversationById(sendingConversationId, sendingMessages);
-      
-      // 设置发送状态
+
+      // 设置发送状态与调试时序基准。
       this.isSending = true;
       this.abortController = new AbortController();
-      
+      const streamDebugStart = Date.now();
+      let streamDebugFirstAt = 0;
+      let streamDebugCount = 0;
+
       this.scrollToBottom();
 
       try {
+        // 使用 fetch 直接读取 ReadableStream，确保逐事件渲染。
         const response = await fetch(
           this.buildApiUrl("/autotest/ai/chat/stream"),
           {
@@ -846,6 +857,8 @@ export default {
               token: localStorage.getItem("token"),
             },
             body: JSON.stringify({
+              // 后端请求体Schema示例：
+              // {"projectId":"p1","message":"问题","useRag":true,"messages":[{"role":"user","content":"历史"}]}
               projectId: projectId,
               message: inputMsg,
               useRag: this.useRag,
@@ -857,7 +870,7 @@ export default {
         if (!response.ok || !response.body) {
           throw new Error(`网络异常或服务错误（HTTP ${response.status}）`);
         }
-        
+
         const contentType = String(response.headers.get("content-type") || "");
         if (!contentType.includes("text/event-stream")) {
           throw new Error("AI服务未返回SSE流，请检查后端流式配置");
@@ -870,7 +883,8 @@ export default {
         let reachEnd = false;
         let lastEventAt = Date.now();
         const idleTimeoutMs = 120000;
-        
+
+        // 防止无事件长时间挂起，超时后由上层统一错误处理。
         const readWithTimeout = () =>
           Promise.race([
             reader.read(),
@@ -898,16 +912,17 @@ export default {
           } catch (e) {
             throw e;
           }
-          
+
           if (done) {
             break;
           }
-          
+
           const text = decoder
             .decode(value, { stream: true })
             .replace(/\r\n/g, "\n");
           sseBuffer += text;
-          
+
+          // SSE分帧：按空行分隔事件，再提取 data: 行作为JSON载荷。
           let eventEnd = sseBuffer.indexOf("\n\n");
           while (eventEnd !== -1) {
             const rawEvent = sseBuffer.slice(0, eventEnd);
@@ -918,7 +933,7 @@ export default {
               .map((line) => line.replace(/^data:\s*/, ""))
               .join("\n")
               .trim();
-              
+
             if (payload) {
               let data = null;
               try {
@@ -926,25 +941,41 @@ export default {
               } catch (e) {
                 data = null;
               }
-              
+
               if (!data) {
                 eventEnd = sseBuffer.indexOf("\n\n");
                 continue;
               }
-              
+
               if (data.type === "content" && data.delta) {
                 lastEventAt = Date.now();
-                // 只更新最后一个消息的内容，不替换整个数组
+                streamDebugCount += 1;
+                if (!streamDebugFirstAt) {
+                  streamDebugFirstAt = Date.now();
+                  console.info(
+                    "[AI_STREAM_FRONT] first_delta_delay_ms=",
+                    streamDebugFirstAt - streamDebugStart
+                  );
+                }
+                if (streamDebugCount % 20 === 0) {
+                  console.info(
+                    "[AI_STREAM_FRONT] progress_events=",
+                    streamDebugCount,
+                    "elapsed_ms=",
+                    Date.now() - streamDebugStart
+                  );
+                }
+                // 直通渲染：每个delta抵达即更新UI，不做前端聚合缓冲。
                 const lastMsg = sendingMessages[sendingMessages.length - 1];
                 if (lastMsg && lastMsg.role === "assistant") {
                   lastMsg.content += data.delta;
-                  // 触发响应式更新
                   this.$set(this.messages, this.messages.length - 1, {
                     ...lastMsg,
                   });
                   this.scrollToBottom();
                 }
               } else if (data.type === "case" && data.case) {
+                // 用例事件携带结构化草稿与关联api_ids，渲染到最后一条assistant消息。
                 lastEventAt = Date.now();
                 const lastMsg = sendingMessages[sendingMessages.length - 1];
                 if (lastMsg) {
@@ -965,6 +996,7 @@ export default {
               } else if (data.type === "error") {
                 throw new Error(data.message || "AI服务错误");
               } else if (data.type === "end") {
+                // 明确结束事件，主动退出读取循环。
                 lastEventAt = Date.now();
                 reachEnd = true;
                 break;
@@ -972,12 +1004,17 @@ export default {
             }
             eventEnd = sseBuffer.indexOf("\n\n");
           }
-          
+
           if (reachEnd) {
             break;
           }
         }
-        
+        console.info(
+          "[AI_STREAM_FRONT] end_events=",
+          streamDebugCount,
+          "total_ms=",
+          Date.now() - streamDebugStart
+        );
         // 保存最终消息
         this.updateConversationById(sendingConversationId, sendingMessages);
       } catch (error) {
@@ -998,7 +1035,9 @@ export default {
             time: Date.now(),
           });
           this.updateConversationById(sendingConversationId, sendingMessages);
-          this.$message.error("AI服务调用失败：" + (error.message || "未知错误"));
+          this.$message.error(
+            "AI服务调用失败：" + (error.message || "未知错误")
+          );
         }
       } finally {
         this.isSending = false;
@@ -1364,7 +1403,7 @@ export default {
         sourceType: "manual",
         updateUser: userId,
       });
-      
+
       const knowledgeId = this.getResponseData(saveRes);
       if (knowledgeId === null || knowledgeId === undefined) {
         this.$message.error("保存知识库失败");

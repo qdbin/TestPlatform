@@ -15,9 +15,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.core.task.TaskExecutor;
+import org.springframework.http.MediaType;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +53,9 @@ public class AiController {
 
     @Resource
     private RestTemplate restTemplate;
+
+    @Resource(name = "aiStreamTaskExecutor")
+    private TaskExecutor aiStreamTaskExecutor;
 
     private String getLoginUserId(HttpServletRequest request) {
         Object userId = request.getSession(true).getAttribute("userId");
@@ -205,6 +211,7 @@ public class AiController {
     @PostMapping("/knowledge")
     public Map<String, Object> saveKnowledge(@RequestBody AiKnowledgeRequest request,
             HttpServletRequest httpServletRequest) {
+        // 知识文档增改统一入口：create/update通过id是否为空区分。
         assertProjectAccess(httpServletRequest, request.getProjectId());
         String loginUserId = getLoginUserId(httpServletRequest);
         request.setUpdateUser(loginUserId);
@@ -228,6 +235,7 @@ public class AiController {
     @DeleteMapping("/knowledge/{id}")
     public Map<String, Object> deleteKnowledge(@PathVariable String id, @RequestParam String projectId,
             HttpServletRequest httpServletRequest) {
+        // 删除前必须做“项目权限 + 文档粒度权限”双重校验。
         assertProjectAccess(httpServletRequest, projectId);
         AiKnowledge existed = aiService.getKnowledgeDetail(id);
         if (!canManageKnowledgeItem(httpServletRequest, existed)) {
@@ -245,6 +253,7 @@ public class AiController {
     @PostMapping("/knowledge/index/{id}")
     public Map<String, Object> indexKnowledge(@PathVariable String id, @RequestParam String projectId,
             HttpServletRequest httpServletRequest) {
+        // 索引触发后由服务层同步更新indexed/degraded/error状态。
         assertProjectAccess(httpServletRequest, projectId);
         AiKnowledge existed = aiService.getKnowledgeDetail(id);
         if (!canManageKnowledgeItem(httpServletRequest, existed)) {
@@ -262,19 +271,26 @@ public class AiController {
     /**
      * 十一、AI对话（SSE流式）
      */
-    @PostMapping("/chat/stream")
+    @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chatStream(@RequestBody AiChatStreamRequest request,
             @RequestHeader(value = "token", required = false) String token,
-            HttpServletRequest httpServletRequest) {
+            HttpServletRequest httpServletRequest,
+            HttpServletResponse httpServletResponse) {
         String projectId = request.getProjectId();
         assertProjectAccess(httpServletRequest, projectId);
+        // 显式声明SSE防缓冲响应头，降低代理层攒包风险。
+        httpServletResponse.setHeader("Cache-Control", "no-cache");
+        httpServletResponse.setHeader("Connection", "keep-alive");
+        httpServletResponse.setHeader("X-Accel-Buffering", "no");
         SseEmitter emitter = new SseEmitter(300000L); // 5分钟超时
 
+        // 使用专用线程池，避免公共线程池拥堵导致首包延迟。
         CompletableFuture.runAsync(() -> {
             try {
                 String message = request.getMessage();
                 boolean useRag = request.getUseRag() == null || request.getUseRag();
 
+                // 字段映射：前端驼峰字段转AI服务下划线字段。
                 Map<String, Object> aiRequest = new HashMap<>();
                 aiRequest.put("project_id", projectId);
                 aiRequest.put("message", message);
@@ -292,7 +308,7 @@ public class AiController {
                 }
                 emitter.complete();
             }
-        });
+        }, aiStreamTaskExecutor);
 
         return emitter;
     }
@@ -320,6 +336,10 @@ public class AiController {
     public Map<String, Object> getAgentApiList(@PathVariable String projectId,
             @RequestHeader(value = "token", required = false) String token,
             HttpServletRequest httpServletRequest) {
+        /**
+         * Agent调度辅助接口：
+         * 给前端“选择接口”场景提供当前项目完整接口清单。
+         */
         assertProjectAccess(httpServletRequest, projectId);
         return aiService.getAgentApiList(projectId, token);
     }
@@ -350,6 +370,7 @@ public class AiController {
 
     @GetMapping("/schema/case")
     public Map<String, Object> getCaseSchema(@RequestParam String projectId, HttpServletRequest httpServletRequest) {
+        // 仅抽取Case生成所需Schema，减少上下文体积。
         assertProjectAccess(httpServletRequest, projectId);
         return getSchemaByNames(projectId, "CaseRequest,CaseApiRequest", httpServletRequest);
     }
@@ -358,6 +379,7 @@ public class AiController {
     public Map<String, Object> getSchemaByNames(@RequestParam String projectId,
             @RequestParam String names,
             HttpServletRequest httpServletRequest) {
+        // Schema抽取示例：names=CaseRequest,CaseApiRequest
         assertProjectAccess(httpServletRequest, projectId);
         String contextUrl = httpServletRequest.getScheme() + "://" + httpServletRequest.getServerName() + ":"
                 + httpServletRequest.getServerPort();

@@ -83,7 +83,10 @@ class LLMService:
     def chat_with_stream(
         self, messages: List[Dict[str, str]], system_prompt: Optional[str] = None
     ) -> Iterator[str]:
-        """流式对话生成 - 返回字符串迭代器"""
+        """
+        流式对话生成。
+        与 chat() 的区别是通过 llm.stream() 按增量块返回，供SSE链路直通转发。
+        """
         try:
             llm = self._create_llm(True)
         except Exception as e:
@@ -110,6 +113,7 @@ class LLMService:
             try:
                 for chunk in llm.stream(langchain_messages):
                     if hasattr(chunk, "content") and chunk.content:
+                        # 保持最小语义单元转发，避免在服务层再次拼接。
                         yield chunk.content
             except Exception as e:
                 print(f"流式生成错误: {e}")

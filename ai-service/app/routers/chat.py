@@ -15,6 +15,10 @@ router = APIRouter()
 
 
 class ChatRequest(BaseModel):
+    """
+    聊天请求模型。
+    messages示例: [{"role":"user","content":"上个问题"}, {"role":"assistant","content":"上个回答"}]
+    """
     project_id: str
     message: str
     use_rag: bool = True
@@ -64,11 +68,14 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
                 use_rag=request.use_rag,
                 messages=request.messages or [],
             ):
+                # SSE标准帧：每个事件以双换行结尾，前端按 \n\n 分帧消费。
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
+            # 正常收尾事件，前端据此停止读取。
             yield f"data: {json.dumps({'type': 'end'}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
+            # 异常也按SSE事件输出，避免前端读流阻塞。
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(

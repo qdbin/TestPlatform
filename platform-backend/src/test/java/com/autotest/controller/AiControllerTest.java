@@ -14,10 +14,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -33,6 +35,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doAnswer;
 
 @ExtendWith(MockitoExtension.class)
 class AiControllerTest {
@@ -51,6 +54,10 @@ class AiControllerTest {
     private HttpSession session;
     @Mock
     private RestTemplate restTemplate;
+    @Mock
+    private TaskExecutor aiStreamTaskExecutor;
+    @Mock
+    private HttpServletResponse response;
 
     private AiController buildController() {
         AiController controller = new AiController();
@@ -60,6 +67,7 @@ class AiControllerTest {
         ReflectionTestUtils.setField(controller, "caseService", caseService);
         ReflectionTestUtils.setField(controller, "objectMapper", new ObjectMapper());
         ReflectionTestUtils.setField(controller, "restTemplate", restTemplate);
+        ReflectionTestUtils.setField(controller, "aiStreamTaskExecutor", aiStreamTaskExecutor);
         return controller;
     }
 
@@ -88,7 +96,8 @@ class AiControllerTest {
         body.put("case", caseMap);
 
         Map<String, Object> result = controller.saveGeneratedCase(body, request);
-        ArgumentCaptor<com.autotest.request.CaseRequest> captor = ArgumentCaptor.forClass(com.autotest.request.CaseRequest.class);
+        ArgumentCaptor<com.autotest.request.CaseRequest> captor = ArgumentCaptor
+                .forClass(com.autotest.request.CaseRequest.class);
         verify(caseService).saveCase(captor.capture());
         verify(aiService).validateCaseApiIds(eq("p1"), any());
         assertEquals("p1", captor.getValue().getProjectId());
@@ -140,7 +149,14 @@ class AiControllerTest {
         history.add(userMessage);
         body.setMessages(history);
 
-        controller.chatStream(body, "tok", request);
+        doNothing().when(response).setHeader(any(), any());
+        doAnswer(invocation -> {
+            Runnable runnable = invocation.getArgument(0);
+            runnable.run();
+            return null;
+        }).when(aiStreamTaskExecutor).execute(any());
+        controller.chatStream(body, "tok", request, response);
+        verify(aiStreamTaskExecutor).execute(any());
         ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
         verify(aiService, timeout(1000)).streamChat(captor.capture(), eq("tok"), any());
         Map<String, Object> aiRequest = captor.getValue();

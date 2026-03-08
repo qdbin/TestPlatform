@@ -32,6 +32,8 @@ class PlatformClient:
         return self.last_error
 
     def _extract_success_data(self, payload: Any) -> Any:
+        # 平台统一响应兼容：
+        # {"status":0,"data":...} 或 {"status":"success","data":...}
         if not isinstance(payload, dict):
             self._mark_error("平台响应格式错误")
             return None
@@ -134,6 +136,11 @@ class PlatformClient:
             return []
 
     def get_case_schema(self, project_id: str) -> Dict[str, Any]:
+        """
+        获取后端CaseRequest相关Schema，供Agent约束输出结构。
+        返回示例：
+        {"CaseRequest": {...}, "CaseApiRequest": {...}}
+        """
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.get(

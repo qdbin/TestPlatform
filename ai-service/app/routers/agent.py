@@ -13,6 +13,15 @@ router = APIRouter()
 
 class GenerateCaseRequest(BaseModel):
     """用例生成请求"""
+    """
+    Schema示例：
+    {
+      "project_id":"p1",
+      "user_requirement":"设计登录+注册链路用例",
+      "selected_apis":["1001","1002"],
+      "messages":[{"role":"user","content":"历史需求"}]
+    }
+    """
 
     project_id: str
     user_requirement: str
@@ -23,7 +32,7 @@ class GenerateCaseRequest(BaseModel):
 @router.post("/generate-case")
 async def generate_case(request: GenerateCaseRequest, raw_request: Request):
     """
-    生成测试用例
+    生成测试用例（Agent调度入口）
     """
     try:
         token = raw_request.headers.get("token") or ""
@@ -43,7 +52,8 @@ async def generate_case(request: GenerateCaseRequest, raw_request: Request):
 @router.get("/api-list/{project_id}")
 async def get_api_list(project_id: str, raw_request: Request):
     """
-    获取接口列表供用户选择
+    获取接口列表供用户选择。
+    该接口主要服务于“手动选接口 + Agent生成”协同场景。
     """
     try:
         token = raw_request.headers.get("token") or ""
