@@ -248,12 +248,12 @@ public class AiService {
         }
         HttpEntity<Object> entity = new HttpEntity<>(request, headers);
         long streamStart = System.currentTimeMillis();
-        final long[] firstEventAt = { 0L };
-        final int[] eventCount = { 0 };
+        final long[] firstEventAt = {0L};
+        final int[] eventCount = {0};
 
         try {
             restTemplate.execute(
-                    aiServiceBaseUrl + "/ai/chat/stream",
+                aiServiceBaseUrl + "/ai/chat/stream",
                     HttpMethod.POST,
                     restTemplate.httpEntityCallback(entity),
                     response -> {
