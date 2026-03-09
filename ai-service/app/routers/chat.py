@@ -18,50 +18,28 @@ class ChatRequest(BaseModel):
     """
     聊天请求模型。
     messages示例: [{"role":"user","content":"上个问题"}, {"role":"assistant","content":"上个回答"}]
+    use_rag=True 表示启用知识检索增强。
     """
+
     project_id: str
     message: str
     use_rag: bool = True
     messages: Optional[List[Dict[str, Any]]] = None
 
 
-class ChatResponse(BaseModel):
-    content: str
-
-
-@router.post("/chat")
-async def chat(request: ChatRequest, raw_request: Request):
-    """
-    AI对话接口（非流式）
-    """
-    try:
-        token = raw_request.headers.get("token") or ""
-        result = agent_service.chat(
-            project_id=request.project_id,
-            token=token,
-            message=request.message,
-            use_rag=request.use_rag,
-            messages=request.messages or [],
-        )
-
-        return {
-            "content": result.get("reply", ""),
-            "case": result.get("case"),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI服务调用失败: {str(e)}")
-
-
 @router.post("/chat/stream")
 async def chat_stream(request: ChatRequest, raw_request: Request):
     """
     AI对话接口（SSE流式输出）
+    @param request: 聊天请求体
+    @param raw_request: 原始HTTP请求（读取token）
+    @return: text/event-stream 响应
     """
 
-    async def generate():
+    def generate():
         try:
             token = raw_request.headers.get("token") or ""
-            for event in agent_service.stream_chat(
+            for event in agent_service.stream_chat(  # Agent层负责流式事件编排
                 project_id=request.project_id,
                 token=token,
                 message=request.message,

@@ -16,13 +16,21 @@ from app.config import config
 
 
 class LLMService:
-    """LLM服务类"""
+    """
+    LLM服务类。
+    职责：统一封装 LangChain ChatOpenAI 的普通调用、JSON调用、流式调用。
+    """
 
     def __init__(self):
         self._llm = None
         self._provider = config.llm_provider.lower()
 
     def _create_llm(self, streaming: bool):
+        """
+        创建底层 LangChain ChatOpenAI 客户端。
+        @param streaming: 是否启用流式输出
+        @return: ChatOpenAI 实例
+        """
         if self._provider == "deepseek" or self._provider == "openai":
             return ChatOpenAI(
                 model=config.llm_model,
@@ -56,7 +64,12 @@ class LLMService:
     def chat(
         self, messages: List[Dict[str, str]], system_prompt: Optional[str] = None
     ) -> str:
-        """对话生成"""
+        """
+        普通同步对话。
+        @param messages: 历史消息
+        @param system_prompt: 系统提示词
+        @return: 完整回答文本
+        """
         llm = self._get_llm()
         if llm is None:
             return "AI服务未配置，请检查API Key"
@@ -79,6 +92,40 @@ class LLMService:
 
         response = llm.invoke(langchain_messages)
         return response.content
+
+    def chat_json(
+        self,
+        messages: List[Dict[str, str]],
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        """
+        JSON模式对话。
+        优先使用 response_format={"type":"json_object"} 约束模型输出严格 JSON，
+        当模型不支持该参数时回退到普通 invoke。
+        """
+        llm = self._get_llm()
+        if llm is None:
+            return "{}"
+        langchain_messages = []
+        if system_prompt:
+            langchain_messages.append(SystemMessage(content=system_prompt))
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "user":
+                langchain_messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                langchain_messages.append(AIMessage(content=content))
+            elif role == "system":
+                langchain_messages.append(SystemMessage(content=content))
+        try:
+            response = llm.bind(response_format={"type": "json_object"}).invoke(
+                langchain_messages
+            )
+            return response.content if response and response.content else "{}"
+        except Exception:
+            response = llm.invoke(langchain_messages)
+            return response.content if response and response.content else "{}"
 
     def chat_with_stream(
         self, messages: List[Dict[str, str]], system_prompt: Optional[str] = None
@@ -111,9 +158,10 @@ class LLMService:
 
         def stream_generator():
             try:
-                for chunk in llm.stream(langchain_messages):
+                for chunk in llm.stream(
+                    langchain_messages
+                ):  # LangChain流式API：逐块返回增量token
                     if hasattr(chunk, "content") and chunk.content:
-                        # 保持最小语义单元转发，避免在服务层再次拼接。
                         yield chunk.content
             except Exception as e:
                 print(f"流式生成错误: {e}")

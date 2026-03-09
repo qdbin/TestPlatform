@@ -8,19 +8,12 @@ import com.autotest.mapper.ApiMapper;
 import com.autotest.request.AiKnowledgeRequest;
 import com.autotest.request.CaseApiRequest;
 import com.autotest.request.CaseRequest;
+import com.autotest.service.ai.AiFeignClient;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.MediaType;
+import feign.Response;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.client.RestTemplate;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import javax.annotation.Resource;
@@ -36,13 +29,11 @@ import java.util.*;
 @Service
 @Transactional(rollbackFor = Exception.class)
 public class AiService {
-    private static final Logger log = LoggerFactory.getLogger(AiService.class);
-
     @Resource
     private AiKnowledgeMapper aiKnowledgeMapper;
 
     @Resource
-    private RestTemplate restTemplate;
+    private AiFeignClient aiFeignClient;
 
     @Resource
     private ObjectMapper objectMapper;
@@ -50,35 +41,8 @@ public class AiService {
     @Resource
     private ApiMapper apiMapper;
 
-    @Value("${ai.service.base-url:http://localhost:8001}")
-    private String aiServiceBaseUrl;
-
-    private <T> T postToAiService(String path, Object body, String token, Class<T> responseType) {
-        HttpHeaders headers = new HttpHeaders();
-        if (token != null && !token.isEmpty()) {
-            headers.add("token", token);
-        }
-        HttpEntity<Object> entity = new HttpEntity<>(body, headers);
-        ResponseEntity<T> response = restTemplate.exchange(
-                aiServiceBaseUrl + path,
-                HttpMethod.POST,
-                entity,
-                responseType);
-        return response.getBody();
-    }
-
-    private <T> T getFromAiService(String path, String token, Class<T> responseType) {
-        HttpHeaders headers = new HttpHeaders();
-        if (token != null && !token.isEmpty()) {
-            headers.add("token", token);
-        }
-        HttpEntity<Void> entity = new HttpEntity<>(headers);
-        ResponseEntity<T> response = restTemplate.exchange(
-                aiServiceBaseUrl + path,
-                HttpMethod.GET,
-                entity,
-                responseType);
-        return response.getBody();
+    private String normalizeToken(String token) {
+        return token == null ? "" : token;
     }
 
     // ==================== 知识库管理 ====================
@@ -134,7 +98,7 @@ public class AiService {
         Map<String, Object> deleteRequest = new HashMap<>();
         deleteRequest.put("project_id", targetProjectId);
         deleteRequest.put("doc_id", knowledgeId);
-        postToAiService("/ai/rag/delete", deleteRequest, null, Map.class);
+        aiFeignClient.deleteRag(deleteRequest);
         aiKnowledgeMapper.deleteKnowledge(knowledgeId);
     }
 
@@ -172,7 +136,7 @@ public class AiService {
             params.put("doc_type", knowledge.getDocType());
             params.put("doc_name", knowledge.getName());
             params.put("content", knowledge.getContent());
-            Map<String, Object> indexResult = postToAiService("/ai/rag/add", params, null, Map.class);
+            Map<String, Object> indexResult = aiFeignClient.addRag(params);
             boolean indexed = indexResult != null && Boolean.TRUE.equals(indexResult.get("indexed"));
             boolean degraded = indexResult != null && Boolean.TRUE.equals(indexResult.get("degraded"));
             String indexError = indexResult == null ? "" : String.valueOf(indexResult.getOrDefault("error", ""));
@@ -222,77 +186,31 @@ public class AiService {
     // ==================== AI对话和用例生成（转发到FastAPI） ====================
 
     /**
-     * 十四、AI对话（SSE流式）
-     */
-    public Map<String, Object> chat(Map<String, Object> request, String token) {
-        try {
-            return postToAiService("/ai/chat", request, token, Map.class);
-        } catch (Exception e) {
-            throw new LMException("AI服务调用失败: " + e.getMessage());
-        }
-    }
-
-    /**
      * 流式对话转发：
      * 读取AI服务SSE事件并原样转发给前端，维持 content/case/error/end 事件协议。
      */
     public void streamChat(Map<String, Object> request, String token, SseEmitter emitter) {
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        if (token != null && !token.isEmpty()) {
-            headers.add("token", token);
-        }
-        HttpEntity<Object> entity = new HttpEntity<>(request, headers);
-        long streamStart = System.currentTimeMillis();
-        final long[] firstEventAt = { 0L };
-        final int[] eventCount = { 0 };
-
-        try {
-            restTemplate.execute(
-                    aiServiceBaseUrl + "/ai/chat/stream",
-                    HttpMethod.POST,
-                    restTemplate.httpEntityCallback(entity),
-                    response -> {
-                        try (BufferedReader reader = new BufferedReader(
-                                new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
-                            String line;
-                            while ((line = reader.readLine()) != null) {
-                                // 仅处理SSE数据行，忽略注释/空行。
-                                if (!line.startsWith("data:")) {
-                                    continue;
-                                }
-                                String payload = line.replaceFirst("^data:\\s*", "").trim();
-                                if (payload.isEmpty()) {
-                                    continue;
-                                }
-                                // 每个data块按JSON事件解析，保持事件边界不被重组。
-                                Map<String, Object> event = objectMapper.readValue(
-                                        payload,
-                                        new TypeReference<Map<String, Object>>() {
-                                        });
-                                long now = System.currentTimeMillis();
-                                eventCount[0] += 1;
-                                if (firstEventAt[0] == 0L) {
-                                    firstEventAt[0] = now;
-                                    log.info("AI流式首包到达 delay={}ms", firstEventAt[0] - streamStart);
-                                }
-                                if (eventCount[0] % 20 == 0 || "end".equals(String.valueOf(event.get("type")))) {
-                                    log.info("AI流式转发进度 events={} elapsed={}ms type={}",
-                                            eventCount[0], now - streamStart, String.valueOf(event.get("type")));
-                                }
-                                // 直通发送给前端，避免后端层再做拼接缓存。
-                                emitter.send(SseEmitter.event().data(event));
-                                if ("end".equals(String.valueOf(event.get("type")))) {
-                                    break;
-                                }
-                            }
-                        }
-                        return null;
-                    });
-            log.info("AI流式转发完成 events={} total={}ms", eventCount[0], System.currentTimeMillis() - streamStart);
+        try (Response response = aiFeignClient.streamChat(request, normalizeToken(token));
+                BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(response.body().asInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (!line.startsWith("data:")) {
+                    continue;
+                }
+                String payload = line.replaceFirst("^data:\\s*", "").trim();
+                if (payload.isEmpty()) {
+                    continue;
+                }
+                Map<String, Object> event = objectMapper.readValue(payload, new TypeReference<Map<String, Object>>() {
+                });
+                emitter.send(SseEmitter.event().data(event));
+                if ("end".equals(String.valueOf(event.get("type")))) {
+                    break;
+                }
+            }
             emitter.complete();
         } catch (Exception e) {
-            log.error("AI流式转发失败 total={}ms error={}", System.currentTimeMillis() - streamStart, e.getMessage(), e);
             try {
                 Map<String, Object> errorPayload = new HashMap<>();
                 errorPayload.put("type", "error");
@@ -309,7 +227,7 @@ public class AiService {
      */
     public Map<String, Object> generateCase(Map<String, Object> request, String token) {
         try {
-            return postToAiService("/ai/agent/generate-case", request, token, Map.class);
+            return aiFeignClient.generateCase(request, normalizeToken(token));
         } catch (Exception e) {
             throw new LMException("用例生成失败: " + e.getMessage());
         }
@@ -321,7 +239,7 @@ public class AiService {
      */
     public Map<String, Object> getAgentApiList(String projectId, String token) {
         try {
-            return getFromAiService("/ai/agent/api-list/" + projectId, token, Map.class);
+            return aiFeignClient.getAgentApiList(projectId, normalizeToken(token));
         } catch (Exception e) {
             throw new LMException("获取接口列表失败: " + e.getMessage());
         }

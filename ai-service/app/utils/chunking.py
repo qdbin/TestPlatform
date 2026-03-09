@@ -8,17 +8,26 @@ import re
 
 
 class TextChunker:
-    """文本分块器"""
+    """
+    文本分块器。
+    职责：将长文按标题/段落/句子切分为适合RAG索引的片段。
+    """
 
     @staticmethod
     def chunk_markdown_by_heading(text: str, chunk_size: int = 1200) -> List[str]:
+        """
+        按 Markdown 标题优先切片。
+        @param text: 原始文档
+        @param chunk_size: 单片最大字符数
+        @return: 切片结果
+        """
         if not text:
             return []
         lines = text.splitlines()
         sections: List[str] = []
         current: List[str] = []
         for line in lines:
-            if re.match(r"^\s{0,3}#{1,6}\s+", line) and current:
+            if re.match(r"^\s{0,3}#{1,6}\s+", line) and current:  # 新标题触发新分段
                 sections.append("\n".join(current).strip())
                 current = [line]
             else:
@@ -29,7 +38,7 @@ class TextChunker:
         for section in sections:
             if not section:
                 continue
-            if len(section) <= chunk_size:
+            if len(section) <= chunk_size:  # 小段直接保留，减少语义断裂
                 normalized_sections.append(section)
                 continue
             paragraphs = [item for item in section.split("\n\n") if item.strip()]
@@ -183,7 +192,11 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]
     Returns:
         分块后的文本列表
     """
-    chunks = TextChunker.chunk_markdown_by_heading(text, max(chunk_size, 800))
+    chunks = TextChunker.chunk_markdown_by_heading(
+        text, max(chunk_size, 800)
+    )  # 标题分块优先
     if chunks:
         return chunks
-    return TextChunker.chunk_by_paragraph(text, chunk_size, overlap)
+    return TextChunker.chunk_by_paragraph(
+        text, chunk_size, overlap
+    )  # 无标题时回退段落分块

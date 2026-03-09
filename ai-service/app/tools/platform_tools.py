@@ -9,7 +9,10 @@ from app.config import config
 
 
 class PlatformClient:
-    """平台API客户端"""
+    """
+    平台API客户端。
+    职责：封装 AI 服务到测试平台后端的 RPC/HTTP 调用细节。
+    """
 
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):
         self.base_url = base_url or config.platform_base_url
@@ -18,7 +21,10 @@ class PlatformClient:
         self.last_error = ""
 
     def _get_headers(self) -> Dict[str, str]:
-        """获取请求头"""
+        """
+        构建请求头。
+        token 由上层透传，用于复用平台登录态。
+        """
         headers = {
             "Content-Type": "application/json",
             "token": self.api_key,
@@ -38,7 +44,14 @@ class PlatformClient:
             self._mark_error("平台响应格式错误")
             return None
         status = payload.get("status")
-        if status not in (0, "0", "success", "SUCCESS", True, None):
+        if status not in (
+            0,
+            "0",
+            "success",
+            "SUCCESS",
+            True,
+            None,
+        ):  # 平台多版本状态码兼容
             self._mark_error(str(payload.get("message") or "平台业务状态异常"))
             return None
         self._mark_error("")
@@ -138,6 +151,8 @@ class PlatformClient:
     def get_case_schema(self, project_id: str) -> Dict[str, Any]:
         """
         获取后端CaseRequest相关Schema，供Agent约束输出结构。
+        @param project_id: 项目ID
+        @return: schema字典，失败返回 {}
         返回示例：
         {"CaseRequest": {...}, "CaseApiRequest": {...}}
         """

@@ -13,6 +13,7 @@ router = APIRouter()
 
 class GenerateCaseRequest(BaseModel):
     """用例生成请求"""
+
     """
     Schema示例：
     {
@@ -23,10 +24,10 @@ class GenerateCaseRequest(BaseModel):
     }
     """
 
-    project_id: str
-    user_requirement: str
-    selected_apis: Optional[List[str]] = None
-    messages: Optional[List[Dict[str, Any]]] = None
+    project_id: str  # 项目ID：用于接口池与知识库隔离
+    user_requirement: str  # 用户需求：自然语言场景描述
+    selected_apis: Optional[List[str]] = None  # 可选：前端手工指定接口集合
+    messages: Optional[List[Dict[str, Any]]] = None  # 历史上下文：提升连续对话效果
 
 
 @router.post("/generate-case")
@@ -36,12 +37,14 @@ async def generate_case(request: GenerateCaseRequest, raw_request: Request):
     """
     try:
         token = raw_request.headers.get("token") or ""
-        result = agent_service.generate_case(
-            project_id=request.project_id,
-            token=token,
-            user_requirement=request.user_requirement,
-            selected_apis=request.selected_apis,
-            messages=request.messages or [],
+        result = (
+            agent_service.generate_case(  # Agent主流程：选接口 -> 组prompt -> 生成JSON
+                project_id=request.project_id,
+                token=token,
+                user_requirement=request.user_requirement,
+                selected_apis=request.selected_apis,
+                messages=request.messages or [],
+            )
         )
         return result
 

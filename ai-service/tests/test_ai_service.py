@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from typing import List, Dict, Any
 
 import pytest
@@ -241,27 +242,6 @@ def test_platform_client_headers():
     assert headers.get("token") == "t123"
 
 
-def test_chat_api_uses_agent(monkeypatch, client: TestClient):
-    from app.services import agent_service as agent_service_module
-
-    def fake_chat(
-        project_id: str, token: str, message: str, use_rag: bool, messages=None
-    ):
-        return {"reply": "你好", "case": {"name": "demo"}}
-
-    monkeypatch.setattr(agent_service_module.agent_service, "chat", fake_chat)
-
-    resp = client.post(
-        "/ai/chat",
-        json={"project_id": "p1", "message": "测试", "use_rag": True, "messages": []},
-        headers={"token": "tok"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["content"] == "你好"
-    assert data["case"]["name"] == "demo"
-
-
 def test_chat_stream_sse_format(monkeypatch, client: TestClient):
     from app.services import agent_service as agent_service_module
 
@@ -286,6 +266,37 @@ def test_chat_stream_sse_format(monkeypatch, client: TestClient):
     assert "data:" in text
     assert '"type": "case"' in text
     assert '"type": "end"' in text
+
+
+def test_chat_stream_should_flush_first_event_without_waiting(
+    monkeypatch, client: TestClient
+):
+    from app.services import agent_service as agent_service_module
+
+    def fake_stream_chat(
+        project_id: str, token: str, message: str, use_rag: bool, messages=None
+    ):
+        yield {"type": "content", "delta": "正在思考，请稍候..."}
+        time.sleep(0.25)
+        yield {"type": "content", "delta": "后续内容"}
+
+    monkeypatch.setattr(
+        agent_service_module.agent_service, "stream_chat", fake_stream_chat
+    )
+    start = time.time()
+    with client.stream(
+        "POST",
+        "/ai/chat/stream",
+        json={"project_id": "p1", "message": "测试", "use_rag": True, "messages": []},
+        headers={"token": "tok"},
+    ) as resp:
+        assert resp.status_code == 200
+        for line in resp.iter_lines():
+            if line and line.startswith("data:"):
+                first_delay = time.time() - start
+                assert first_delay < 0.35
+                assert "正在思考" in line
+                break
 
 
 def test_agent_chat_case_via_executor(monkeypatch):
@@ -341,7 +352,7 @@ def test_generate_case_json_repair(monkeypatch):
     )
     monkeypatch.setattr(
         llm_service_module.llm_service,
-        "chat",
+        "chat_json",
         lambda messages, system_prompt=None: '{"name":"登录用例","caseApis":[{"apiId":"api_1","description":"步骤1"},{"apiId":"api_1","description":"步骤2"}],}',
     )
 
@@ -566,3 +577,80 @@ def test_rag_doc_name_should_be_searchable(monkeypatch):
     results = rag_service.search("p_doc", "韩斌", top_k=5)
     assert len(results) > 0
     assert any("韩斌" in str(item.get("content") or "") for item in results)
+
+
+def test_stream_chat_case_should_emit_first_chunk_immediately(monkeypatch):
+    from app.services.agent_service import agent_service
+
+    def slow_generate_case(
+        project_id, token, user_requirement, selected_apis=None, messages=None
+    ):
+        time.sleep(0.25)
+        return {
+            "status": "success",
+            "case": {"name": "登录用例"},
+            "existing_api_ids": [],
+        }
+
+    monkeypatch.setattr(agent_service, "generate_case", slow_generate_case)
+    stream = agent_service.stream_chat(
+        project_id="p1",
+        token="tok",
+        message="请生成登录用例",
+        use_rag=True,
+        messages=[],
+    )
+    start = time.time()
+    first = next(stream)
+    elapsed = time.time() - start
+    assert elapsed < 0.12
+    assert first.get("type") == "content"
+    assert "正在生成用例" in str(first.get("delta") or "")
+
+
+def test_stream_chat_should_split_large_delta(monkeypatch):
+    from app.services.agent_service import agent_service
+    from app.services import llm_service as llm_service_module
+
+    monkeypatch.setattr(
+        llm_service_module.llm_service,
+        "chat_with_stream",
+        lambda messages, system_prompt=None: iter(["A" * 45]),
+    )
+    stream = agent_service.stream_chat(
+        project_id="p1",
+        token="tok",
+        message="解释登录接口断言",
+        use_rag=False,
+        messages=[],
+    )
+    parts = [evt.get("delta", "") for evt in stream if evt.get("type") == "content"]
+    assert parts[0] == "正在思考，请稍候..."
+    merged = "".join([part for part in parts if part and part.strip()])
+    assert "A" * 45 in merged
+
+
+def test_stream_chat_non_case_should_emit_first_chunk_immediately(monkeypatch):
+    from app.services.agent_service import agent_service
+    from app.services import llm_service as llm_service_module
+
+    def delayed_stream(messages, system_prompt=None):
+        time.sleep(0.35)
+        yield "测试流式内容"
+
+    monkeypatch.setattr(
+        llm_service_module.llm_service, "chat_with_stream", delayed_stream
+    )
+    stream = agent_service.stream_chat(
+        project_id="p1",
+        token="tok",
+        message="什么是接口测试",
+        use_rag=False,
+        messages=[],
+    )
+    start = time.time()
+    first = next(stream)
+    elapsed = time.time() - start
+    assert elapsed < 0.12
+    assert first.get("type") == "content"
+    assert "正在思考" in str(first.get("delta") or "")

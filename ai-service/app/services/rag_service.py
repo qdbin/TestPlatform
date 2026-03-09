@@ -1,3 +1,12 @@
+"""
+RAG检索服务模块。
+
+职责：
+1) 管理 Embedding 组件与 Chroma 向量库连接。
+2) 将文档分片写入向量库并维护 project/doc 级隔离。
+3) 执行“关键词 + 向量”混合检索并输出统一状态码。
+"""
+
 from typing import List, Dict, Any, Optional, Tuple
 import chromadb
 from chromadb.config import Settings
@@ -6,7 +15,10 @@ from app.config import config
 
 
 class OpenAIEmbeddingFunction:
-    """使用OpenAI兼容API的Embedding函数（支持OpenAI、Ollama等）"""
+    """
+    OpenAI 兼容 Embedding 适配器。
+    适用场景：接入 OpenAI / DeepSeek 兼容网关的 embedding 接口。
+    """
 
     def __init__(
         self,
@@ -19,13 +31,19 @@ class OpenAIEmbeddingFunction:
         self.model = model
 
     def __call__(self, input: List[str]) -> List[List[float]]:
-        """生成文档向量"""
+        """
+        批量文本向量化。
+        @param input: 待向量化文本列表
+        @return: 向量列表（顺序与 input 一致）
+        """
         embeddings = []
         for text in input:
             try:
-                headers = {"Content-Type": "application/json"}
+                headers = {"Content-Type": "application/json"}  # OpenAI 兼容 JSON 协议
                 if self.api_key:
-                    headers["Authorization"] = f"Bearer {self.api_key}"
+                    headers["Authorization"] = (
+                        f"Bearer {self.api_key}"  # 鉴权头（私有部署可为空）
+                    )
 
                 response = httpx.post(
                     f"{self.base_url}/embeddings",
@@ -56,7 +74,10 @@ class OpenAIEmbeddingFunction:
 
 
 class OllamaEmbeddingFunction:
-    """使用Ollama的Embedding函数（本地部署，完全免费）"""
+    """
+    Ollama Embedding 适配器（本地模型）。
+    兼容 /api/embeddings（旧）与 /api/embed（新）两套接口。
+    """
 
     def __init__(
         self, base_url: str = "http://localhost:11434", model: str = "nomic-embed-text"
@@ -110,7 +131,10 @@ class OllamaEmbeddingFunction:
 
 
 class RAGService:
-    """RAG核心服务：负责知识分片向量化、索引写入、混合检索与状态回传。"""
+    """
+    RAG核心服务（检索增强生成）。
+    主要职责：Embedding 管理、向量写入、混合检索、状态回传。
+    """
 
     def __init__(self):
         self._embedding_func = None
@@ -119,7 +143,13 @@ class RAGService:
         self._embedding_init_failed = False
 
     def _init_components(self) -> None:
-        """延迟初始化向量存储组件"""
+        """
+        延迟初始化 Embedding 与 Chroma 组件。
+        实现阶段：
+        1) 按配置选择 provider（openai/ollama）。
+        2) 初始化 embedding 函数并记录降级状态。
+        3) 初始化 Chroma PersistentClient。
+        """
         if self._embedding_func is None and not self._embedding_init_failed:
             provider = config.get("embedding.provider", "ollama")
 
@@ -186,6 +216,12 @@ class RAGService:
         return self._collection
 
     def _fallback_embed(self, text: str, dims: int = 768) -> List[float]:
+        """
+        降级向量算法（哈希分桶）。
+        @param text: 原始文本
+        @param dims: 向量维度，默认 768（兼容主流 embedding 维度）
+        @return: 归一化后的伪向量
+        """
         values = [0.0] * dims
         source = str(text or "")
         if not source:
@@ -202,17 +238,23 @@ class RAGService:
         文档向量化（含降级）。
         返回值: (embeddings, used_fallback)
         """
-        if self._embedding_func is not None:
+        if self._embedding_func is not None:  # 主路径：真实 embedding
             try:
                 vectors = self._embedding_func.embed_documents(documents)
                 if vectors and len(vectors) == len(documents):
                     return vectors, False
             except Exception:
                 pass
-        return [self._fallback_embed(item) for item in documents], True
+        return [
+            self._fallback_embed(item) for item in documents
+        ], True  # 降级路径：哈希伪向量
 
     def _embed_query_with_fallback(self, query: str) -> Tuple[List[float], bool]:
-        """查询向量化（含降级），用于在线检索阶段。"""
+        """
+        查询向量化（含降级）。
+        @param query: 用户检索问题
+        @return: (query_vector, used_fallback)
+        """
         if self._embedding_func is not None:
             try:
                 vector = self._embedding_func.embed_query(query)
@@ -242,6 +284,17 @@ class RAGService:
     ) -> Dict[str, Any]:
         """
         写入知识文档分片到向量库。
+        @param project_id: 项目ID（跨项目隔离主键）
+        @param doc_id: 文档ID（重建索引时会覆盖）
+        @param doc_type: 文档类型（manual/api_doc 等）
+        @param doc_name: 文档名（用于关键词召回增强）
+        @param documents: 文档分片文本列表
+        @return: {indexed,degraded,vector_count,error}
+
+        示例：
+        输入：project_id=p1, doc_id=d1, documents=['登录说明1','登录说明2']
+        输出：{"indexed":true,"vector_count":2,"error":""}
+
         Schema示例：
         - metadata: {"project_id":"p1","doc_id":"d1","doc_type":"manual","doc_name":"登录规范","chunk_index":0}
         - id: "p1_d1_0"
@@ -272,7 +325,7 @@ class RAGService:
         self._init_components()
         try:
             collection = self._get_or_create_collection()
-            # 先删后写，保证同一doc_id重建索引时不会残留旧分片。
+            # 关键阶段：先删后写，保证重建索引不残留旧向量。
             collection.delete(where=self._doc_where(project_id, doc_id))
             embeddings, used_fallback = self._embed_documents_with_fallback(
                 normalized_docs
@@ -328,7 +381,9 @@ class RAGService:
         - fallback: 使用降级Embedding检索
         - embedding_unavailable: 无可用向量
         """
-        query_embedding, used_fallback = self._embed_query_with_fallback(query)
+        query_embedding, used_fallback = self._embed_query_with_fallback(
+            query
+        )  # 阶段1：查询向量化
         if not query_embedding:
             return "embedding_unavailable", []
         collection = self._get_or_create_collection()
@@ -355,11 +410,17 @@ class RAGService:
                         ),
                     }
                 )
-        return ("fallback" if used_fallback else "success"), formatted_results
+        return (
+            "fallback" if used_fallback else "success"
+        ), formatted_results  # 阶段2：格式统一
 
     def _keyword_search(
         self, project_id: str, query: str, top_k: int
     ) -> List[Dict[str, Any]]:
+        """
+        关键词召回。
+        目的：在 embedding 不稳定或语义向量未命中时提供可解释兜底。
+        """
         collection = self._get_or_create_collection()
         source = self._safe_collection_get(collection, {"project_id": project_id})
         documents = source.get("documents") or []
@@ -426,18 +487,32 @@ class RAGService:
         project_id = str(project_id)
         self._init_components()
         try:
+            # 阶段1：并行策略（先分别召回，再融合排序）
             keyword_hits = self._keyword_search(project_id, query, top_k)
             vector_status, vector_hits = self._vector_search(project_id, query, top_k)
-            merged: List[Dict[str, Any]] = []
-            seen = set()
-            for item in keyword_hits + vector_hits:
-                key = (str(item.get("content") or ""), str(item.get("metadata") or ""))
-                if key in seen:
-                    continue
-                seen.add(key)
-                merged.append(item)
-                if len(merged) >= top_k:
-                    break
+            merged_map: Dict[str, Dict[str, Any]] = {}
+            for rank, item in enumerate(keyword_hits):
+                key = f"{str(item.get('content') or '')}|{str(item.get('metadata') or '')}"
+                base = merged_map.get(key, {"item": item, "score": 0.0})
+                base["score"] += 1.0 / (rank + 1)
+                merged_map[key] = base
+            for rank, item in enumerate(vector_hits):
+                key = f"{str(item.get('content') or '')}|{str(item.get('metadata') or '')}"
+                distance = float(item.get("distance") or 0.0)
+                similarity = max(0.0, 1.0 - distance)
+                base = merged_map.get(key, {"item": item, "score": 0.0})
+                base["score"] += (1.0 / (rank + 1)) + similarity
+                if "item" in base and isinstance(base["item"], dict):
+                    base["item"]["distance"] = min(
+                        float(base["item"].get("distance") or 1.0), distance
+                    )
+                merged_map[key] = base
+            ranked = sorted(
+                merged_map.values(),
+                key=lambda value: float(value.get("score") or 0),
+                reverse=True,
+            )
+            merged = [entry["item"] for entry in ranked[:top_k]]
             if merged:
                 return {"status": "success", "data": merged}
             if vector_status == "embedding_unavailable":
@@ -453,7 +528,12 @@ class RAGService:
         return self.search_with_status(project_id, query, top_k).get("data", [])
 
     def delete_document(self, project_id: str, doc_id: str) -> Dict[str, Any]:
-        """按(project_id, doc_id)删除所有向量分片，并返回删除数量。"""
+        """
+        删除文档对应向量分片。
+        @param project_id: 项目ID
+        @param doc_id: 文档ID
+        @return: 删除状态与删除数量
+        """
         project_id = str(project_id)
         doc_id = str(doc_id)
         try:
@@ -471,6 +551,11 @@ class RAGService:
             return {"status": "error", "vector_deleted": 0, "error": str(e)}
 
     def get_collection_stats(self, project_id: str) -> Dict[str, Any]:
+        """
+        获取项目向量统计信息。
+        @param project_id: 项目ID
+        @return: count/project_id/collection_name
+        """
         project_id = str(project_id)
         try:
             self._init_components()

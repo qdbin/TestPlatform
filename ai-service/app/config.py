@@ -10,7 +10,10 @@ from typing import Optional, Dict, Any
 
 
 class Config:
-    """配置管理类"""
+    """
+    配置管理单例。
+    职责：读取 config.yaml，并支持环境变量覆盖敏感配置。
+    """
 
     _instance: Optional["Config"] = None
     _config: Dict[str, Any] = {}
@@ -74,7 +77,7 @@ class Config:
 
     @property
     def llm_base_url(self) -> str:
-        return self.get("llm.base_url", "https://api.deepseek.com/v1")
+        return self.get("llm.base_url", "https://api.deepseek.com/v1")  # LLM网关地址（兼容OpenAI协议）
 
     @property
     def llm_temperature(self) -> float:

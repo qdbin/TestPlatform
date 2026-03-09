@@ -1,15 +1,24 @@
+"""
+Agent核心编排模块。
+
+职责：
+1) 基于 LangChain ReAct 工具链选择项目接口。
+2) 融合 RAG 证据、Schema 约束和历史消息生成可保存用例。
+3) 提供普通问答与 SSE 流式输出统一入口。
+"""
+
 from __future__ import annotations
 
 import json
-import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain.prompts import PromptTemplate
-from langchain.tools import Tool
+from langchain.tools import Tool, StructuredTool
 from pydantic import BaseModel, ValidationError, ConfigDict
 
 try:
@@ -23,8 +32,6 @@ except Exception:
 from app.services.llm_service import llm_service
 from app.services.rag_service import rag_service
 from app.tools.platform_tools import get_platform_client
-
-logger = logging.getLogger("uvicorn.error")
 
 ASSISTANT_ROLE_PROMPT = """你是接口自动化测试平台的AI智能助手，专注于帮助用户进行接口测试和用例设计。
 
@@ -46,18 +53,13 @@ ASSISTANT_ROLE_PROMPT = """你是接口自动化测试平台的AI智能助手，
 4. 至少生成2个步骤（正向场景+异常场景）
 5. 流程类需求需串联多个相关接口
 6. 禁止输出草稿、提案、伪代码、自然语言步骤
-7. 禁止补充数据库不存在的接口、字段或路径
-
-## 错误处理
-- 无相关接口时：明确告知"当前项目未找到相关接口"
-- 知识库无结果：说明"未检索到相关文档"，再给通用建议
-- 格式错误：自动重试一次，失败则返回明确错误"""
+7. 禁止补充数据库不存在的接口、字段或路径"""  # 用例生成系统提示词：严格JSON与项目隔离
 
 CHAT_ROLE_PROMPT = """你是接口测试助手。
 要求：
 1. 直接回答，先给结论再给要点；
 2. 避免冗长铺垫，优先短句；
-3. 不确定时明确说明不确定。"""
+3. 不确定时明确说明不确定。"""  # 普通问答系统提示词：简洁回答
 
 
 class CaseApiStepModel(BaseModel):
@@ -98,6 +100,14 @@ class CaseRequestModel(BaseModel):
     caseApis: List[CaseApiStepModel]
     caseWebs: List[Any] = []
     caseApps: List[Any] = []
+
+
+class ApiIdInput(BaseModel):
+    api_id: str
+
+
+class ApiIdsInput(BaseModel):
+    api_ids_csv: str
 
 
 def _try_parse_json_object(text: str) -> Optional[Dict[str, Any]]:
@@ -184,7 +194,10 @@ def _is_project_private_query(message: str) -> bool:
 
 
 class AgentService:
-    """AI助手核心服务，负责问答、用例生成与流式事件编排。"""
+    """
+    AgentService（AI助手核心服务）。
+    主要职责：ReAct选接口、RAG增强、Case标准化、SSE事件编排。
+    """
 
     def _extract_path_tokens(self, api_item: Dict[str, Any]) -> Set[str]:
         path = str(api_item.get("path") or api_item.get("url") or "").lower()
@@ -278,6 +291,13 @@ class AgentService:
     def _build_case_selector_executor(
         self, project_id: str, token: str, all_apis: List[Dict[str, Any]]
     ) -> AgentExecutor:
+        """
+        构建 LangChain ReAct 执行器。
+        @param project_id: 项目ID
+        @param token: 平台鉴权token
+        @param all_apis: 项目接口池
+        @return: AgentExecutor（含工具注册与Prompt约束）
+        """
         llm = llm_service._get_llm()
         if llm is None:
             raise RuntimeError("llm_not_configured")
@@ -337,25 +357,28 @@ class AgentService:
             ]
             return json.dumps({"api_ids": ids[:5]}, ensure_ascii=False)
 
-        tools = [
+        tools = [  # ReAct工具集：列表、详情、关系、规划
             Tool(
                 name="get_api_list",
                 func=get_api_list,
                 description="获取当前项目全部接口列表，输入固定为none",
             ),
-            Tool(
+            StructuredTool.from_function(
                 name="get_api_detail",
-                func=get_api_detail,
+                func=lambda api_id: get_api_detail(api_id),
+                args_schema=ApiIdInput,
                 description="输入接口id，返回该接口详细信息",
             ),
-            Tool(
+            StructuredTool.from_function(
                 name="get_api_relation",
-                func=get_api_relation,
+                func=lambda api_id: get_api_relation(api_id),
+                args_schema=ApiIdInput,
                 description="输入接口id，返回接口依赖关系",
             ),
-            Tool(
+            StructuredTool.from_function(
                 name="generate_testcase",
-                func=generate_testcase,
+                func=lambda api_ids_csv: generate_testcase(api_ids_csv),
+                args_schema=ApiIdsInput,
                 description="输入逗号分隔api_id，输出api_ids数组",
             ),
         ]
@@ -407,6 +430,7 @@ class AgentService:
             if any(cue.lower() in query for cue in cues)
         ]
         try:
+            # 关键阶段：优先走 ReAct 工具链，拿到可解释的 api_ids。
             executor = self._build_case_selector_executor(project_id, token, all_apis)
             result = executor.invoke({"input": user_requirement})
             output = result.get("output") if isinstance(result, dict) else ""
@@ -431,7 +455,7 @@ class AgentService:
                 return ids[:5]
         except Exception:
             pass
-        ranked: List[Dict[str, Any]] = []
+        ranked: List[Dict[str, Any]] = []  # 回退阶段：关键词打分
         for item in all_apis:
             if not isinstance(item, dict):
                 continue
@@ -509,6 +533,7 @@ class AgentService:
             "1. 只能使用下方接口列表中的apiId，禁止创建新接口\n"
             "2. 输出必须是纯JSON对象，不要包含```json标记或任何解释\n"
             "3. 必须符合后端CaseRequest Schema结构\n\n"
+            "4. 必须保证 projectId 为当前项目ID，且每个 caseApis.apiId 来自可用接口列表\n\n"
             f"## 项目ID\n{project_id}\n\n"
             f"## 用户需求\n{user_requirement}\n\n"
             f"## 历史对话\n{history_text or '无'}\n\n"
@@ -516,6 +541,18 @@ class AgentService:
             f"## 接口依赖关系\n{json.dumps(api_relations, ensure_ascii=False)}\n\n"
             f"## 知识片段\n{json.dumps(rag_docs[:3], ensure_ascii=False)}\n\n"
             f"## 后端Schema参考\n{json.dumps(schema_payload, ensure_ascii=False, indent=2)[:2000]}\n\n"
+            "## 小样本（仅示例结构，不可复用示例apiId）\n"
+            "{\n"
+            '  "name": "登录流程用例",\n'
+            '  "projectId": "当前项目ID",\n'
+            '  "type": "API",\n'
+            '  "moduleId": "模块ID",\n'
+            '  "moduleName": "模块名",\n'
+            '  "caseApis": [\n'
+            '    {"index": 1, "apiId": "真实接口ID", "description": "正向场景", "header": [], "body": {}, "query": [], "rest": [], "assertion": [], "relation": [], "controller": [], "apiMethod": "POST", "apiName": "接口名", "apiPath": "/path"},\n'
+            '    {"index": 2, "apiId": "真实接口ID", "description": "异常场景", "header": [], "body": {}, "query": [], "rest": [], "assertion": [], "relation": [], "controller": [], "apiMethod": "GET", "apiName": "接口名", "apiPath": "/path"}\n'
+            "  ]\n"
+            "}\n\n"
             "## 输出要求\n"
             "1. 顶层字段必须包含：name, projectId, moduleId, moduleName, type='API'\n"
             "2. caseApis数组不能为空，每个元素必须包含：apiId, index, description\n"
@@ -523,6 +560,7 @@ class AgentService:
             "4. 至少生成2个步骤（可包含正向和异常场景）\n"
             "5. 每个步骤补全apiMethod、apiPath、apiName（从接口列表复制）\n\n"
             "## 输出格式\n"
+            "你必须输出合法 JSON 对象，以便 response_format={\"type\":\"json_object\"} 直接解析。\n"
             "直接输出JSON对象，不要任何解释或Markdown标记。\n"
             "不需要包含后端自动生成字段（如createTime、updateTime、createUser）。\n"
         )
@@ -735,6 +773,13 @@ class AgentService:
     ):
         """
         用例生成主流程。
+        @param project_id: 当前项目ID
+        @param token: 平台鉴权token
+        @param user_requirement: 用户自然语言需求
+        @param selected_apis: 前端可选指定接口ID
+        @param messages: 历史对话
+        @return: {status,case,existing_api_ids,error}
+
         步骤：拉取接口池 -> 选择候选接口 -> 读取接口详情/关系 -> 融合RAG与Schema -> 生成并校验CaseRequest。
         """
         platform_client = get_platform_client(token)
@@ -796,9 +841,9 @@ class AgentService:
             messages=messages,
         )
         last_error = ""
-        # 最多两轮：首轮生成，失败后附带错误原因进行修正重试。
+        # 关键阶段：最多两轮重试，第一轮生成，第二轮携带错误反馈。
         for attempt in range(2):
-            raw = llm_service.chat(
+            raw = llm_service.chat_json(
                 [{"role": "user", "content": prompt}],
                 system_prompt=ASSISTANT_ROLE_PROMPT,
             )
@@ -887,6 +932,17 @@ class AgentService:
     ):
         """
         SSE流式对话生成器。
+        @param project_id: 项目ID
+        @param token: 平台鉴权token
+        @param message: 当前轮输入
+        @param use_rag: 是否开启知识库检索
+        @param messages: 历史消息
+        @return: 逐条 yield SSE事件字典
+
+        示例：
+        输入：message='请说明登录测试点'
+        输出：{"type":"content","delta":"..."} / {"type":"end"}
+
         事件协议：
         - {"type": "content", "delta": "..."} 增量文本
         - {"type": "case", "case": {...}, "api_ids": [...]} 用例草稿
@@ -896,22 +952,38 @@ class AgentService:
             yield {"type": "content", "delta": "请先输入问题"}
             return
         if _is_case_request(msg):
-            result = self.generate_case(
-                project_id, token, msg, selected_apis=[], messages=messages or []
-            )
+            yield {"type": "content", "delta": "正在生成用例，请稍候..."}
+            with ThreadPoolExecutor(
+                max_workers=1
+            ) as executor:  # 后台线程执行耗时用例生成
+                future = executor.submit(
+                    self.generate_case,
+                    project_id,
+                    token,
+                    msg,
+                    [],
+                    messages or [],
+                )
+                while not future.done():  # 主线程持续输出心跳，避免前端长时间无首包
+                    time.sleep(0.15)
+                    yield {"type": "content", "delta": " "}
+                result = future.result()
             if result.get("status") == "success":
-                reply = "已生成用例预览，请在预览区确认并手动保存。"
-                # 用例场景仍保持逐字符输出，便于前端复用统一渲染路径。
-                for char in reply:
-                    yield {"type": "content", "delta": char}
+                yield {
+                    "type": "content",
+                    "delta": "\n已生成用例预览，请在预览区确认并手动保存。",
+                }
                 yield {
                     "type": "case",
                     "case": result.get("case"),
                     "api_ids": result.get("existing_api_ids", []),
                 }
                 return
-            for char in str(result.get("message") or "用例生成失败，请更换描述"):
-                yield {"type": "content", "delta": char}
+            yield {
+                "type": "content",
+                "delta": "\n"
+                + str(result.get("message") or "用例生成失败，请更换描述"),
+            }
             return
         rag_docs: List[Dict[str, Any]] = []
         rag_status = ""
@@ -924,56 +996,41 @@ class AgentService:
         chat_messages.append({"role": "user", "content": final_prompt})
 
         has_output = False
-        # 记录链路时序，便于区分“首包慢”与“中途阻塞”。
-        stream_start = time.time()
-        first_output_at = 0.0
-        event_count = 0
-        logger.info(
-            "[AI_STREAM] start project_id=%s use_rag=%s", str(project_id), str(use_rag)
-        )
         try:
-            for delta in llm_service.chat_with_stream(
-                chat_messages, system_prompt=CHAT_ROLE_PROMPT
-            ):
+            yield {"type": "content", "delta": "正在思考，请稍候..."}
+            with ThreadPoolExecutor(
+                max_workers=1
+            ) as executor:  # 后台线程拉取LLM流，主线程负责SSE节奏
+                future = executor.submit(
+                    lambda: list(
+                        llm_service.chat_with_stream(
+                            chat_messages, system_prompt=CHAT_ROLE_PROMPT
+                        )
+                    )
+                )
+                while not future.done():  # 心跳字符用于强制刷新前端流式状态
+                    time.sleep(0.12)
+                    yield {"type": "content", "delta": " "}
+                stream_chunks = future.result()
+            for delta in stream_chunks:
                 if delta:
-                    now = time.time()
-                    if not first_output_at:
-                        first_output_at = now
-                        logger.info(
-                            "[AI_STREAM] first_delta_delay=%.3fs project_id=%s",
-                            first_output_at - stream_start,
-                            str(project_id),
-                        )
                     has_output = True
-                    event_count += 1
-                    # 直通转发：拿到一个chunk就产出一个delta，不做服务内聚合。
-                    yield {"type": "content", "delta": delta}
-                    if event_count % 20 == 0:
-                        logger.info(
-                            "[AI_STREAM] progress events=%d elapsed=%.3fs",
-                            event_count,
-                            time.time() - stream_start,
-                        )
-            logger.info(
-                "[AI_STREAM] end project_id=%s events=%d duration=%.3fs",
-                str(project_id),
-                event_count,
-                time.time() - stream_start,
-            )
+                    text = str(delta)
+                    step = 20  # 单次切片长度：平衡实时性与渲染开销
+                    for i in range(0, len(text), step):
+                        yield {"type": "content", "delta": text[i : i + step]}
+                        time.sleep(0.02)
         except Exception as e:
-            logger.exception(
-                "[AI_STREAM] error project_id=%s detail=%s", str(project_id), str(e)
-            )
             if not has_output:
-                # 兜底策略：上游流式失败时退化为一次性回答并按固定步长切片。
                 fallback = llm_service.chat(
                     chat_messages, system_prompt=CHAT_ROLE_PROMPT
                 )
                 if fallback:
                     text = str(fallback)
-                    step = 12
+                    step = 12  # fallback切片更细，避免一次性大段刷屏
                     for i in range(0, len(text), step):
                         yield {"type": "content", "delta": text[i : i + step]}
+                        time.sleep(0.02)
 
     def get_api_list_for_selection(
         self, project_id: str, token: str

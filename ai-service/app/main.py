@@ -15,7 +15,7 @@ from app.routers import chat, knowledge, agent
 app = FastAPI(
     title="AI智能测试助手服务",
     description="为测试平台提供AI对话、Rag智能问答和用例生成功能",
-    version="1.0.0",
+    version="1.0.0",  # 服务版本：用于健康检查与部署核对
 )
 
 # 配置CORS跨域
