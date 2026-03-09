@@ -13,6 +13,7 @@ except Exception:
     from langchain_community.chat_models import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage, AIMessage, BaseMessage
 from app.config import config
+from app.observability import app_logger, langchain_console_callback
 
 
 class LLMService:
@@ -39,6 +40,7 @@ class LLMService:
                 temperature=config.llm_temperature,
                 max_tokens=config.llm_max_tokens,
                 streaming=streaming,
+                callbacks=[langchain_console_callback],
             )
         if self._provider == "qwen":
             return ChatOpenAI(
@@ -48,6 +50,7 @@ class LLMService:
                 temperature=config.llm_temperature,
                 max_tokens=config.llm_max_tokens,
                 streaming=streaming,
+                callbacks=[langchain_console_callback],
             )
         raise ValueError(f"Unknown LLM provider: {self._provider}")
 
@@ -57,9 +60,26 @@ class LLMService:
             try:
                 self._llm = self._create_llm(False)
             except Exception as e:
-                print(f"LLM初始化失败: {e}")
+                app_logger.error("LLM初始化失败: {}", str(e))
                 return None
         return self._llm
+
+    def _build_langchain_messages(
+        self, messages: List[Dict[str, str]], system_prompt: Optional[str]
+    ) -> List[BaseMessage]:
+        langchain_messages: List[BaseMessage] = []
+        if system_prompt:
+            langchain_messages.append(SystemMessage(content=system_prompt))
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "user":
+                langchain_messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                langchain_messages.append(AIMessage(content=content))
+            elif role == "system":
+                langchain_messages.append(SystemMessage(content=content))
+        return langchain_messages
 
     def chat(
         self, messages: List[Dict[str, str]], system_prompt: Optional[str] = None
@@ -74,22 +94,7 @@ class LLMService:
         if llm is None:
             return "AI服务未配置，请检查API Key"
 
-        langchain_messages = []
-
-        if system_prompt:
-            langchain_messages.append(SystemMessage(content=system_prompt))
-
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-
-            if role == "user":
-                langchain_messages.append(HumanMessage(content=content))
-            elif role == "assistant":
-                langchain_messages.append(AIMessage(content=content))
-            elif role == "system":
-                langchain_messages.append(SystemMessage(content=content))
-
+        langchain_messages = self._build_langchain_messages(messages, system_prompt)
         response = llm.invoke(langchain_messages)
         return response.content
 
@@ -106,18 +111,7 @@ class LLMService:
         llm = self._get_llm()
         if llm is None:
             return "{}"
-        langchain_messages = []
-        if system_prompt:
-            langchain_messages.append(SystemMessage(content=system_prompt))
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            if role == "user":
-                langchain_messages.append(HumanMessage(content=content))
-            elif role == "assistant":
-                langchain_messages.append(AIMessage(content=content))
-            elif role == "system":
-                langchain_messages.append(SystemMessage(content=content))
+        langchain_messages = self._build_langchain_messages(messages, system_prompt)
         try:
             response = llm.bind(response_format={"type": "json_object"}).invoke(
                 langchain_messages
@@ -137,24 +131,10 @@ class LLMService:
         try:
             llm = self._create_llm(True)
         except Exception as e:
-            print(f"创建流式LLM失败: {e}")
+            app_logger.error("创建流式LLM失败: {}", str(e))
             return iter([])
 
-        langchain_messages: List[BaseMessage] = []
-
-        if system_prompt:
-            langchain_messages.append(SystemMessage(content=system_prompt))
-
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-
-            if role == "user":
-                langchain_messages.append(HumanMessage(content=content))
-            elif role == "assistant":
-                langchain_messages.append(AIMessage(content=content))
-            elif role == "system":
-                langchain_messages.append(SystemMessage(content=content))
+        langchain_messages = self._build_langchain_messages(messages, system_prompt)
 
         def stream_generator():
             try:
@@ -164,7 +144,7 @@ class LLMService:
                     if hasattr(chunk, "content") and chunk.content:
                         yield chunk.content
             except Exception as e:
-                print(f"流式生成错误: {e}")
+                app_logger.error("流式生成错误: {}", str(e))
                 yield f"[错误: {str(e)}]"
 
         return stream_generator()

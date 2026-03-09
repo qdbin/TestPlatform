@@ -31,6 +31,12 @@ vector_store:
   persist_directory: "./chroma_data"
   collection_name_prefix: "project_"
 
+reranker:
+  mode: "local_model"  # local_model/http
+  model: "BAAI/bge-reranker-v2-m3"
+  base_url: "http://localhost:11434"
+  timeout: 20
+
 # 平台API配置
 platform:
   base_url: "http://localhost:8080"
@@ -43,3 +49,8 @@ server:
   cors_origins:
     - "http://localhost:5173"
     - "http://localhost:8080"
+
+logging:
+  level: "INFO"
+  console_level: "INFO"
+  dir: "./logs"

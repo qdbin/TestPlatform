@@ -123,30 +123,6 @@ class PlatformClient:
             self._mark_error(f"获取接口详情失败: {e}")
             return None
 
-    def get_environment_list(self, project_id: str) -> List[Dict[str, Any]]:
-        """
-        获取项目环境列表
-
-        Args:
-            project_id: 项目ID
-
-        Returns:
-            环境列表
-        """
-        try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.get(
-                    f"{self.base_url}/autotest/environment/list",
-                    params={"projectId": project_id},
-                    headers=self._get_headers(),
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    return data.get("data", [])
-                return []
-        except Exception as e:
-            print(f"获取环境列表失败: {e}")
-            return []
 
     def get_case_schema(self, project_id: str) -> Dict[str, Any]:
         """
@@ -172,32 +148,6 @@ class PlatformClient:
         except Exception as e:
             self._mark_error(f"获取Case Schema失败: {e}")
             return {}
-
-    def get_module_list(self, project_id: str) -> List[Dict[str, Any]]:
-        """
-        获取项目模块列表
-
-        Args:
-            project_id: 项目ID
-
-        Returns:
-            模块列表
-        """
-        try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.get(
-                    f"{self.base_url}/autotest/module/list",
-                    params={"projectId": project_id},
-                    headers=self._get_headers(),
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    return data.get("data", [])
-                return []
-        except Exception as e:
-            print(f"获取模块列表失败: {e}")
-            return []
-
 
 def get_platform_client(token: Optional[str] = None) -> PlatformClient:
     return PlatformClient(api_key=token or "")

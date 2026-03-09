@@ -31,6 +31,8 @@ except Exception:
 
 from app.services.llm_service import llm_service
 from app.services.rag_service import rag_service
+from app.services.case_workflow import CaseGenerationWorkflow, CaseWorkflowContext
+from app.observability import app_logger
 from app.tools.platform_tools import get_platform_client
 
 ASSISTANT_ROLE_PROMPT = """你是接口自动化测试平台的AI智能助手，专注于帮助用户进行接口测试和用例设计。
@@ -104,10 +106,6 @@ class CaseRequestModel(BaseModel):
 
 class ApiIdInput(BaseModel):
     api_id: str
-
-
-class ApiIdsInput(BaseModel):
-    api_ids_csv: str
 
 
 def _try_parse_json_object(text: str) -> Optional[Dict[str, Any]]:
@@ -198,6 +196,18 @@ class AgentService:
     AgentService（AI助手核心服务）。
     主要职责：ReAct选接口、RAG增强、Case标准化、SSE事件编排。
     """
+
+    def __init__(self):
+        self.case_workflow = CaseGenerationWorkflow(
+            get_platform_client=lambda token: get_platform_client(token),
+            select_api_ids=self._select_api_ids,
+            build_dependency_relations=self._build_dependency_relations,
+            build_case_prompt=self._build_case_prompt,
+            normalize_case=self._normalize_case,
+            parse_json_object=_try_parse_json_object,
+            case_model=CaseRequestModel,
+            assistant_role_prompt=ASSISTANT_ROLE_PROMPT,
+        )
 
     def _extract_path_tokens(self, api_item: Dict[str, Any]) -> Set[str]:
         path = str(api_item.get("path") or api_item.get("url") or "").lower()
@@ -349,14 +359,6 @@ class AgentService:
                     )
             return json.dumps(related[:5], ensure_ascii=False)
 
-        def generate_testcase(api_ids_csv: str) -> str:
-            ids = [
-                item.strip()
-                for item in str(api_ids_csv or "").split(",")
-                if item.strip()
-            ]
-            return json.dumps({"api_ids": ids[:5]}, ensure_ascii=False)
-
         tools = [  # ReAct工具集：列表、详情、关系、规划
             Tool(
                 name="get_api_list",
@@ -374,12 +376,6 @@ class AgentService:
                 func=lambda api_id: get_api_relation(api_id),
                 args_schema=ApiIdInput,
                 description="输入接口id，返回接口依赖关系",
-            ),
-            StructuredTool.from_function(
-                name="generate_testcase",
-                func=lambda api_ids_csv: generate_testcase(api_ids_csv),
-                args_schema=ApiIdsInput,
-                description="输入逗号分隔api_id，输出api_ids数组",
             ),
         ]
         prompt = PromptTemplate.from_template(
@@ -782,108 +778,28 @@ class AgentService:
 
         步骤：拉取接口池 -> 选择候选接口 -> 读取接口详情/关系 -> 融合RAG与Schema -> 生成并校验CaseRequest。
         """
-        platform_client = get_platform_client(token)
-        all_apis = platform_client.get_api_list(project_id) or []
-        if not all_apis:
-            reason = ""
-            if hasattr(platform_client, "get_last_error"):
-                reason = str(platform_client.get_last_error() or "")
-            if reason:
-                return {"status": "error", "message": f"读取接口列表失败：{reason}"}
-            return {
-                "status": "error",
-                "message": "当前项目暂无可用接口，请先在【接口管理】中创建接口后再生成用例",
-            }
-        all_ids = {
-            str(item.get("id"))
-            for item in all_apis
-            if isinstance(item, dict) and item.get("id")
-        }
-        if not all_ids:
-            return {
-                "status": "error",
-                "message": "接口列表解析异常，请检查接口数据格式",
-            }
-        selected = [str(item) for item in (selected_apis or []) if str(item) in all_ids]
-        if not selected:
-            selected = self._select_api_ids(
-                project_id, token, user_requirement, all_apis
-            )
-        selected = [item for item in selected if item in all_ids][:5]
-        if not selected:
-            api_names = [
-                str(item.get("name") or item.get("path") or "")
-                for item in all_apis[:10]
-                if isinstance(item, dict)
-            ]
-            hint = f"当前项目可用接口：{', '.join(api_names[:5])}等。请尝试使用更具体的接口名称描述。"
-            return {"status": "error", "message": f"未匹配到相关接口。{hint}"}
-        api_details: List[Dict[str, Any]] = []
-        for api_id in selected:
-            detail = platform_client.get_api_detail(api_id)
-            if detail:
-                api_details.append(detail)
-        if not api_details:
-            return {
-                "status": "error",
-                "message": "接口详情读取失败，请检查接口是否存在或当前账号是否有权限",
-            }
-        api_relations = self._build_dependency_relations(api_details)
-        rag_docs = rag_service.search(project_id, user_requirement, top_k=6)
-        schema_payload = platform_client.get_case_schema(project_id) or {}
-        prompt = self._build_case_prompt(
+        app_logger.info(
+            "case_workflow_start project_id={} requirement={}",
             project_id,
-            user_requirement,
-            api_details,
-            api_relations,
-            rag_docs,
-            schema_payload,
-            messages=messages,
+            str(user_requirement)[:120],
         )
-        last_error = ""
-        # 关键阶段：最多两轮重试，第一轮生成，第二轮携带错误反馈。
-        for attempt in range(2):
-            raw = llm_service.chat_json(
-                [{"role": "user", "content": prompt}],
-                system_prompt=ASSISTANT_ROLE_PROMPT,
+        result = self.case_workflow.run(
+            CaseWorkflowContext(
+                project_id=project_id,
+                token=token,
+                user_requirement=user_requirement,
+                selected_apis=selected_apis,
+                messages=messages or [],
             )
-            parsed = _try_parse_json_object(raw or "")
-            target = (
-                parsed.get("case")
-                if isinstance(parsed, dict) and isinstance(parsed.get("case"), dict)
-                else parsed
-            )
-            if not isinstance(target, dict):
-                last_error = "json_parse_failed"
-                prompt = (
-                    prompt
-                    + "\n\n注意：上次输出不是有效JSON，请直接输出JSON对象，不要任何解释。"
-                )
-                continue
-            normalized = self._normalize_case(
-                project_id, target, api_details, api_relations=api_relations
-            )
-            try:
-                model = CaseRequestModel.model_validate(normalized)
-                return {
-                    "status": "success",
-                    "case": model.model_dump(),
-                    "existing_api_ids": [
-                        str(item.get("id")) for item in api_details if item.get("id")
-                    ],
-                }
-            except ValidationError as e:
-                last_error = str(e)
-                prompt = (
-                    prompt
-                    + f"\n\n注意：上次输出校验失败：{str(e)[:200]}。请修正后重新输出。"
-                )
-                continue
-        return {
-            "status": "error",
-            "message": "用例生成失败，请更换描述或简化需求",
-            "error": last_error,
-        }
+        )
+        app_logger.info("case_workflow_end status={}", result.get("status"))
+        if (
+            result.get("status") == "error"
+            and result.get("error")
+            and not result.get("message")
+        ):
+            return {"status": "error", "message": str(result.get("error"))}
+        return result
 
     def chat(
         self,

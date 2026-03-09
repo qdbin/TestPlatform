@@ -12,6 +12,8 @@ import chromadb
 from chromadb.config import Settings
 import httpx
 from app.config import config
+from app.observability import app_logger
+from app.services.retrieval import BM25KeywordRetriever, query_rewriter, reranker
 
 
 class OpenAIEmbeddingFunction:
@@ -56,12 +58,14 @@ class OpenAIEmbeddingFunction:
                     embedding = data.get("data", [{}])[0].get("embedding", [])
                     embeddings.append(embedding)
                 else:
-                    print(
-                        f"Embedding API错误: {response.status_code} - {response.text[:200]}"
+                    app_logger.error(
+                        "Embedding API错误 status={} body={}",
+                        response.status_code,
+                        response.text[:200],
                     )
                     return []
             except Exception as e:
-                print(f"Embedding失败: {e}")
+                app_logger.error("Embedding失败: {}", str(e))
                 return []
         return embeddings
 
@@ -141,6 +145,7 @@ class RAGService:
         self._client = None
         self._collection = None
         self._embedding_init_failed = False
+        self._bm25_retriever = BM25KeywordRetriever()
 
     def _init_components(self) -> None:
         """
@@ -169,11 +174,13 @@ class RAGService:
                         api_key, base_url, model
                     )
                     self._embedding_init_failed = False
-                    print(
-                        f"Embedding模型加载成功: OpenAI兼容API ({model}) @ {base_url}"
+                    app_logger.info(
+                        "Embedding模型加载成功: OpenAI兼容API {} @ {}",
+                        model,
+                        base_url,
                     )
                 except Exception as e:
-                    print(f"OpenAI Embedding加载失败: {e}")
+                    app_logger.error("OpenAI Embedding加载失败: {}", str(e))
                     self._embedding_func = None
                     self._embedding_init_failed = True
             elif provider == "ollama":
@@ -189,13 +196,15 @@ class RAGService:
                         ollama_url, ollama_model
                     )
                     self._embedding_init_failed = False
-                    print(f"Embedding模型加载成功: Ollama ({ollama_model})")
+                    app_logger.info("Embedding模型加载成功: Ollama {}", ollama_model)
                 except Exception as e:
-                    print(f"Ollama Embedding加载失败: {e}")
+                    app_logger.error("Ollama Embedding加载失败: {}", str(e))
                     self._embedding_func = None
                     self._embedding_init_failed = True
             else:
-                print(f"未知的Embedding provider: {provider}，使用关键词匹配检索")
+                app_logger.warning(
+                    "未知的Embedding provider: {}，使用关键词匹配检索", provider
+                )
                 self._embedding_func = None
                 self._embedding_init_failed = True
 
@@ -280,7 +289,7 @@ class RAGService:
         doc_id: str,
         doc_type: str,
         doc_name: str,
-        documents: List[str],
+        documents: List[Any],
     ) -> Dict[str, Any]:
         """
         写入知识文档分片到向量库。
@@ -310,11 +319,25 @@ class RAGService:
                 "vector_count": 0,
                 "error": "empty_documents",
             }
-        normalized_docs = [
-            self._format_chunk_document(doc_name, doc_type, item)
-            for item in documents
-            if str(item or "").strip()
-        ]
+        normalized_docs: List[str] = []
+        chunk_metas: List[Dict[str, Any]] = []
+        for item in documents:
+            if isinstance(item, dict):
+                content = str(item.get("content") or "").strip()
+                extra_meta = (
+                    item.get("metadata")
+                    if isinstance(item.get("metadata"), dict)
+                    else {}
+                )
+            else:
+                content = str(item or "").strip()
+                extra_meta = {}
+            if not content:
+                continue
+            normalized_docs.append(
+                self._format_chunk_document(doc_name, doc_type, content)
+            )
+            chunk_metas.append(extra_meta)
         if not normalized_docs:
             return {
                 "indexed": False,
@@ -338,6 +361,7 @@ class RAGService:
                     "doc_type": doc_type,
                     "doc_name": doc_name,
                     "chunk_index": i,
+                    **(chunk_metas[i] if i < len(chunk_metas) else {}),
                 }
                 for i in range(len(normalized_docs))
             ]
@@ -354,7 +378,7 @@ class RAGService:
                 "error": "fallback_embedding" if used_fallback else "",
             }
         except Exception as e:
-            print(f"向量索引失败: {e}")
+            app_logger.error("向量索引失败: {}", str(e))
             return {
                 "indexed": False,
                 "degraded": True,
@@ -370,6 +394,17 @@ class RAGService:
 
     def _doc_where(self, project_id: str, doc_id: str) -> Dict[str, Any]:
         return {"$and": [{"project_id": str(project_id)}, {"doc_id": str(doc_id)}]}
+
+    def _build_merge_key(self, item: Dict[str, Any]) -> str:
+        metadata = (
+            item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        )
+        doc_id = str(metadata.get("doc_id") or "")
+        chunk_index = str(metadata.get("chunk_index") or "")
+        parent_id = str(metadata.get("parent_id") or "")
+        if doc_id and chunk_index:
+            return f"{doc_id}:{chunk_index}:{parent_id}"
+        return str(item.get("content") or "")[:200]
 
     def _vector_search(
         self, project_id: str, query: str, top_k: int
@@ -429,52 +464,7 @@ class RAGService:
             documents = []
         if not isinstance(metadatas, list):
             metadatas = []
-        terms = [
-            item.strip().lower() for item in str(query or "").split() if item.strip()
-        ]
-        if not terms and query:
-            terms = [str(query).strip().lower()]
-        query_text = str(query or "").strip().lower()
-        if query_text and query_text not in terms:
-            terms.append(query_text)
-        ranked: List[Dict[str, Any]] = []
-        for idx, doc in enumerate(documents):
-            text = str(doc or "")
-            content_lc = text.lower()
-            metadata = metadatas[idx] if idx < len(metadatas) else {}
-            metadata_text = " ".join(
-                [
-                    str(metadata.get("doc_name") or ""),
-                    str(metadata.get("doc_type") or ""),
-                ]
-            ).lower()
-            score = 0
-            for term in terms:
-                if not term:
-                    continue
-                if term in content_lc:
-                    score += content_lc.count(term)
-                if metadata_text and term in metadata_text:
-                    score += 3
-            if score <= 0:
-                continue
-            ranked.append(
-                {
-                    "content": text,
-                    "distance": max(0.0, 1.0 - min(1.0, score / 10.0)),
-                    "metadata": metadata,
-                    "score": score,
-                }
-            )
-        ranked.sort(key=lambda item: item.get("score", 0), reverse=True)
-        return [
-            {
-                "content": item["content"],
-                "distance": item["distance"],
-                "metadata": item["metadata"],
-            }
-            for item in ranked[:top_k]
-        ]
+        return self._bm25_retriever.search(query, documents, metadatas, top_k=top_k)
 
     def search_with_status(
         self, project_id: str, query: str, top_k: int = 5
@@ -487,17 +477,28 @@ class RAGService:
         project_id = str(project_id)
         self._init_components()
         try:
-            # 阶段1：并行策略（先分别召回，再融合排序）
-            keyword_hits = self._keyword_search(project_id, query, top_k)
-            vector_status, vector_hits = self._vector_search(project_id, query, top_k)
+            expanded_queries = query_rewriter.rewrite_and_expand(query)
+            keyword_hits: List[Dict[str, Any]] = []
+            vector_hits: List[Dict[str, Any]] = []
+            vector_status = "no_context"
+            for current_query in expanded_queries:
+                keyword_hits.extend(
+                    self._keyword_search(project_id, current_query, top_k)
+                )
+                current_status, current_vector_hits = self._vector_search(
+                    project_id, current_query, top_k
+                )
+                if current_status in {"success", "fallback"}:
+                    vector_status = current_status
+                vector_hits.extend(current_vector_hits)
             merged_map: Dict[str, Dict[str, Any]] = {}
             for rank, item in enumerate(keyword_hits):
-                key = f"{str(item.get('content') or '')}|{str(item.get('metadata') or '')}"
+                key = self._build_merge_key(item)
                 base = merged_map.get(key, {"item": item, "score": 0.0})
                 base["score"] += 1.0 / (rank + 1)
                 merged_map[key] = base
             for rank, item in enumerate(vector_hits):
-                key = f"{str(item.get('content') or '')}|{str(item.get('metadata') or '')}"
+                key = self._build_merge_key(item)
                 distance = float(item.get("distance") or 0.0)
                 similarity = max(0.0, 1.0 - distance)
                 base = merged_map.get(key, {"item": item, "score": 0.0})
@@ -512,14 +513,28 @@ class RAGService:
                 key=lambda value: float(value.get("score") or 0),
                 reverse=True,
             )
-            merged = [entry["item"] for entry in ranked[:top_k]]
+            merged = []
+            for entry in ranked[: max(top_k * 3, top_k)]:
+                item = entry["item"]
+                item["hybrid_score"] = float(entry.get("score") or 0)
+                merged.append(item)
+            reranked = reranker.rerank(query, merged, top_k=top_k)
+            app_logger.info(
+                "rag_search project={} query={} expanded={} hybrid_candidates={} final={}",
+                project_id,
+                query[:80],
+                len(expanded_queries),
+                len(merged),
+                len(reranked),
+            )
+            merged = reranked
             if merged:
                 return {"status": "success", "data": merged}
             if vector_status == "embedding_unavailable":
                 return {"status": "embedding_unavailable", "data": []}
             return {"status": "no_context", "data": []}
         except Exception as e:
-            print(f"向量检索失败: {e}")
+            app_logger.error("向量检索失败: {}", str(e))
             return {"status": "vector_error", "data": [], "error": str(e)}
 
     def search(
@@ -547,7 +562,7 @@ class RAGService:
             collection.delete(where=self._doc_where(project_id, doc_id))
             return {"status": "success", "vector_deleted": delete_count}
         except Exception as e:
-            print(f"Chroma删除失败: {e}")
+            app_logger.error("Chroma删除失败: {}", str(e))
             return {"status": "error", "vector_deleted": 0, "error": str(e)}
 
     def get_collection_stats(self, project_id: str) -> Dict[str, Any]:

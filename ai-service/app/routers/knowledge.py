@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any
 from app.services.rag_service import rag_service
-from app.utils.chunking import chunk_text
+from app.utils.markdown_parent_child_chunking import markdown_parent_child_chunker
 
 router = APIRouter()
 
@@ -39,8 +39,7 @@ class RagDeleteRequest(BaseModel):
 async def add_document(request: RagAddRequest):
     """新增/重建知识文档索引。先切片再写入向量库。"""
     try:
-        # 分片策略：较大chunk + 小重叠，兼顾召回与上下文完整性。
-        chunks = chunk_text(request.content, chunk_size=1200, overlap=80)
+        chunks = markdown_parent_child_chunker.split(request.content)
         if not chunks:
             return {
                 "status": "success",

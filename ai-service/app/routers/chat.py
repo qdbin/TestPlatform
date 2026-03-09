@@ -3,7 +3,7 @@ AI对话路由
 处理AI聊天相关请求，支持SSE流式输出
 """
 
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any

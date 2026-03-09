@@ -5,8 +5,8 @@ FastAPI主应用配置和启动
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from app.config import config
+from app.observability import app_logger
 
 # 路由导入
 from app.routers import chat, knowledge, agent
@@ -36,12 +36,14 @@ app.include_router(agent.router, prefix="/ai/agent", tags=["用例生成"])
 @app.get("/")
 async def root():
     """根路径健康检查"""
+    app_logger.info("health_root_called")
     return {"status": "ok", "service": "AI智能测试助手", "version": "1.0.0"}
 
 
 @app.get("/health")
 async def health():
     """健康检查"""
+    app_logger.info("health_probe_called")
     return {"status": "healthy"}
 
 
