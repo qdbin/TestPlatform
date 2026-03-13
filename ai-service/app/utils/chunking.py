@@ -183,7 +183,11 @@ class TextChunker:
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
     """
     文本分块主函数
-
+    
+    实现策略：
+        1. 优先使用标题分块（保持语义完整）
+        2. 无标题时回退段落分块
+    
     Args:
         text: 原始文本
         chunk_size: 块大小
@@ -194,9 +198,75 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]
     """
     chunks = TextChunker.chunk_markdown_by_heading(
         text, max(chunk_size, 800)
-    )  # 标题分块优先
+    )
     if chunks:
         return chunks
     return TextChunker.chunk_by_paragraph(
         text, chunk_size, overlap
-    )  # 无标题时回退段落分块
+    )
+
+
+if __name__ == "__main__":
+    """
+    文本分块工具调试代码
+    
+    调试说明：
+        1. 测试按标题分块
+        2. 测试按段落分块
+        3. 测试按句子分块
+        4. 测试固定大小分块
+    """
+    print("=" * 60)
+    print("文本分块工具调试")
+    print("=" * 60)
+    
+    test_text = """# 登录接口文档
+
+## 接口说明
+这是一个用户登录接口，用于验证用户身份。
+
+## 请求参数
+- username: 用户名
+- password: 密码
+
+## 响应示例
+```json
+{"code": 200, "message": "success"}
+```
+
+## 注意事项
+1. 用户名区分大小写
+2. 密码需要加密传输
+3. 登录失败返回错误码401
+"""
+    
+    # 测试1：按标题分块
+    print("\n1. 按标题分块测试:")
+    chunks = TextChunker.chunk_markdown_by_heading(test_text, chunk_size=500)
+    print(f"   分块数量: {len(chunks)}")
+    for i, chunk in enumerate(chunks):
+        print(f"   - 块{i+1}: {chunk[:50]}...")
+    
+    # 测试2：按段落分块
+    print("\n2. 按段落分块测试:")
+    chunks = TextChunker.chunk_by_paragraph(test_text, chunk_size=200)
+    print(f"   分块数量: {len(chunks)}")
+    
+    # 测试3：按句子分块
+    print("\n3. 按句子分块测试:")
+    chunks = TextChunker.chunk_by_sentence(test_text, chunk_size=100)
+    print(f"   分块数量: {len(chunks)}")
+    
+    # 测试4：固定大小分块
+    print("\n4. 固定大小分块测试:")
+    chunks = TextChunker.chunk_fixed(test_text, chunk_size=100)
+    print(f"   分块数量: {len(chunks)}")
+    
+    # 测试5：主函数
+    print("\n5. 主函数测试:")
+    chunks = chunk_text(test_text)
+    print(f"   分块数量: {len(chunks)}")
+    
+    print("\n" + "=" * 60)
+    print("调试完成")
+    print("=" * 60)

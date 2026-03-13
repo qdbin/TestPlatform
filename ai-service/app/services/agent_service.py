@@ -1,10 +1,19 @@
 """
-Agent核心编排模块。
+Agent核心编排模块
 
 职责：
-1) 基于 LangChain ReAct 工具链选择项目接口。
-2) 融合 RAG 证据、Schema 约束和历史消息生成可保存用例。
-3) 提供普通问答与 SSE 流式输出统一入口。
+    1. 基于 LangChain ReAct 工具链选择项目接口
+    2. 融合 RAG 证据、Schema 约束和历史消息生成可保存用例
+    3. 提供普通问答与 SSE 流式输出统一入口
+
+核心类说明：
+    - AgentService: 主服务类，负责对话/用例生成流程编排
+    - CaseRequestModel: 用例请求数据模型（Pydantic）
+    - CaseApiStepModel: 用例步骤模型
+
+主要流程：
+    1. 对话流程：识别用例需求 -> RAG检索 -> LLM回答
+    2. 用例生成流程：选接口 -> 读详情 -> 融合RAG -> LLM生成 -> 校验
 """
 
 from __future__ import annotations
@@ -35,6 +44,8 @@ from app.services.case_workflow import CaseGenerationWorkflow, CaseWorkflowConte
 from app.observability import app_logger
 from app.tools.platform_tools import get_platform_client
 
+
+# ==================== 系统提示词 ====================
 ASSISTANT_ROLE_PROMPT = """你是接口自动化测试平台的AI智能助手，专注于帮助用户进行接口测试和用例设计。
 
 ## 核心职责
@@ -55,16 +66,32 @@ ASSISTANT_ROLE_PROMPT = """你是接口自动化测试平台的AI智能助手，
 4. 至少生成2个步骤（正向场景+异常场景）
 5. 流程类需求需串联多个相关接口
 6. 禁止输出草稿、提案、伪代码、自然语言步骤
-7. 禁止补充数据库不存在的接口、字段或路径"""  # 用例生成系统提示词：严格JSON与项目隔离
+7. 禁止补充数据库不存在的接口、字段或路径"""
 
 CHAT_ROLE_PROMPT = """你是接口测试助手。
 要求：
 1. 直接回答，先给结论再给要点；
 2. 避免冗长铺垫，优先短句；
-3. 不确定时明确说明不确定。"""  # 普通问答系统提示词：简洁回答
+3. 不确定时明确说明不确定。"""
+
+
+# ==================== 数据模型定义 ====================
 
 
 class CaseApiStepModel(BaseModel):
+    """
+    用例步骤模型（API接口）
+
+    字段说明：
+        - apiId: 关联的接口ID
+        - apiMethod: HTTP方法
+        - apiPath: 接口路径
+        - apiName: 接口名称
+        - description: 步骤描述
+        - header/query/body: 请求参数
+        - assertion: 断言配置
+    """
+
     model_config = ConfigDict(extra="forbid")
     id: str = ""
     index: int = 0
@@ -84,6 +111,16 @@ class CaseApiStepModel(BaseModel):
 
 
 class CaseRequestModel(BaseModel):
+    """
+    测试用例请求模型
+
+    顶层字段：
+        - name: 用例名称
+        - projectId: 项目ID
+        - moduleId/moduleName: 模块信息
+        - caseApis: 用例步骤列表
+    """
+
     model_config = ConfigDict(extra="forbid")
     id: str = ""
     num: int = 0
@@ -105,10 +142,26 @@ class CaseRequestModel(BaseModel):
 
 
 class ApiIdInput(BaseModel):
+    """ReAct Agent 工具输入模型"""
+
     api_id: str
 
 
+# ==================== 工具函数 ====================
+
+
 def _try_parse_json_object(text: str) -> Optional[Dict[str, Any]]:
+    """
+    尝试解析 JSON 对象
+
+    实现策略：
+        1. 直接尝试解析
+        2. 使用 json_repair 修复后解析
+        3. 正则提取 JSON 片段后解析
+
+    @param text: 待解析文本
+    @return: 解析后的字典，失败返回 None
+    """
     if not text:
         return None
     source = text.strip()
@@ -136,6 +189,17 @@ def _try_parse_json_object(text: str) -> Optional[Dict[str, Any]]:
 def _normalize_messages(
     messages: Optional[List[Dict[str, Any]]],
 ) -> List[Dict[str, str]]:
+    """
+    规范化消息格式
+
+    过滤规则：
+        - 只保留 role 为 user/assistant 的消息
+        - 跳过空内容
+        - 转换为 LangChain 所需格式
+
+    @param messages: 原始消息列表
+    @return: 规范化后的消息列表
+    """
     if not isinstance(messages, list):
         return []
     result: List[Dict[str, str]] = []
@@ -150,6 +214,16 @@ def _normalize_messages(
 
 
 def _is_case_request(message: str) -> bool:
+    """
+    判断是否为用例生成需求
+
+    识别规则：
+        - 包含"用例/测试点/测试场景"等关键词
+        - 包含"生成/设计/编写/创建"等动作词
+
+    @param message: 用户消息
+    @return: 是否为用例需求
+    """
     text = (message or "").lower()
     case_terms = ["用例", "测试点", "测试场景", "测试步骤", "test case", "case"]
     action_terms = ["生成", "设计", "编写", "创建", "输出", "规划", "帮我", "给我"]
@@ -159,6 +233,16 @@ def _is_case_request(message: str) -> bool:
 
 
 def _is_project_private_query(message: str) -> bool:
+    """
+    判断是否为项目私有问题
+
+    识别规则：
+        - 包含项目相关关键词（接口/API/环境等）
+        - 包含 URL 路径格式
+
+    @param message: 用户消息
+    @return: 是否为私有问题
+    """
     text = (message or "").lower()
     private_keywords = [
         "当前项目",
@@ -193,11 +277,17 @@ def _is_project_private_query(message: str) -> bool:
 
 class AgentService:
     """
-    AgentService（AI助手核心服务）。
-    主要职责：ReAct选接口、RAG增强、Case标准化、SSE事件编排。
+    AgentService（AI助手核心服务）
+
+    主要职责：
+        - ReAct选接口：使用LangChain Agent选择项目接口
+        - RAG增强：融合知识库检索结果
+        - Case标准化：Pydantic模型校验生成用例
+        - SSE事件编排：流式输出支持
     """
 
     def __init__(self):
+        # 初始化用例生成工作流
         self.case_workflow = CaseGenerationWorkflow(
             get_platform_client=lambda token: get_platform_client(token),
             select_api_ids=self._select_api_ids,
@@ -210,6 +300,17 @@ class AgentService:
         )
 
     def _extract_path_tokens(self, api_item: Dict[str, Any]) -> Set[str]:
+        """
+        从API路径提取语义token
+
+        实现步骤：
+            1. 获取path/URL字段并转小写
+            2. 按分隔符拆分token
+            3. 过滤停用词和数字
+
+        @param api_item: 接口详情字典
+        @return: 有意义的token集合
+        """
         path = str(api_item.get("path") or api_item.get("url") or "").lower()
         raw_tokens = re.split(r"[/_\-\{\}\.\s]+", path)
         stop_words = {"api", "v1", "v2", "v3", "rest", "openapi"}
@@ -225,16 +326,31 @@ class AgentService:
     def _build_dependency_relations(
         self, api_details: List[Dict[str, Any]]
     ) -> Dict[str, List[str]]:
+        """
+        构建接口依赖关系图
+
+        依赖识别规则：
+            1. 路径token重叠度
+            2. 认证接口优先（login/auth/token）
+            3. 注册→登录链路
+
+        @param api_details: 接口详情列表
+        @return: {api_id: [依赖api_id列表]}
+        """
         if not api_details:
             return {}
         relations: Dict[str, List[str]] = {}
         auth_cues = {"login", "signin", "auth", "token", "oauth"}
         register_cues = {"register", "signup", "user", "account"}
+
+        # 阶段1：提取所有接口的token
         api_tokens = {
             str(item.get("id")): self._extract_path_tokens(item)
             for item in api_details
             if isinstance(item, dict) and item.get("id")
         }
+
+        # 阶段2：计算接口间依赖分数
         for current in api_details:
             if not isinstance(current, dict):
                 continue
@@ -244,6 +360,7 @@ class AgentService:
             current_tokens = api_tokens.get(current_id, set())
             current_method = str(current.get("method") or "").upper()
             scored: List[Dict[str, Any]] = []
+
             for candidate in api_details:
                 if not isinstance(candidate, dict):
                     continue
@@ -251,16 +368,24 @@ class AgentService:
                 if not candidate_id or candidate_id == current_id:
                     continue
                 candidate_tokens = api_tokens.get(candidate_id, set())
+
+                # token重叠度
                 overlap = len(current_tokens & candidate_tokens)
                 score = overlap
+
+                # 认证接口加权
                 if current_method in {"GET", "PUT", "DELETE"} and (
                     candidate_tokens & auth_cues
                 ):
                     score += 2
+                # 注册→登录链路
                 if (current_tokens & register_cues) and (candidate_tokens & auth_cues):
                     score += 1
+
                 if score > 0:
                     scored.append({"id": candidate_id, "score": score})
+
+            # 排序取Top3
             scored.sort(key=lambda x: x.get("score", 0), reverse=True)
             relations[current_id] = [item["id"] for item in scored[:3]]
         return relations
@@ -268,10 +393,26 @@ class AgentService:
     def _build_chat_prompt(
         self, message: str, rag_docs: List[Dict[str, Any]], rag_status: str
     ) -> str:
+        """
+        构建对话Prompt
+
+        策略选择：
+            1. 有RAG结果 → 融合知识片段
+            2. 无结果 + 私有问题 → 提示无证据
+            3. 无结果 + 公开问题 → 直接回答
+            4. RAG异常 → 降级回答
+
+        @param message: 用户消息
+        @param rag_docs: RAG检索结果
+        @param rag_status: RAG状态码
+        @return: 构建后的Prompt
+        """
         docs = [item for item in (rag_docs or []) if isinstance(item, dict)]
         context = "\n\n".join(
             [str(item.get("content") or "") for item in docs if item.get("content")]
         ).strip()
+
+        # 策略1：有RAG结果，融合知识片段
         if context:
             return (
                 "你将同时使用知识库证据和你的通用知识回答。\n"
@@ -279,7 +420,10 @@ class AgentService:
                 f"知识片段：\n{context}\n\n"
                 f"用户问题：{message}"
             )
+
         is_private = _is_project_private_query(message)
+
+        # 策略2：无RAG结果，区分处理
         if rag_status == "no_context":
             if is_private:
                 return (
@@ -291,28 +435,42 @@ class AgentService:
                 "这是公开或通用问题。请直接基于通用知识回答，不要提及知识库未命中。\n"
                 f"用户问题：{message}"
             )
+
+        # 策略3：RAG异常
         if rag_status and rag_status != "success":
             return (
                 "知识库暂不可用。请基于通用知识先给出准确回答，并在最后补一句可稍后重试知识库。\n"
                 f"用户问题：{message}"
             )
+
+        # 策略4：直接返回原问题
         return message
 
     def _build_case_selector_executor(
         self, project_id: str, token: str, all_apis: List[Dict[str, Any]]
     ) -> AgentExecutor:
         """
-        构建 LangChain ReAct 执行器。
+        构建 LangChain ReAct 执行器
+
+        实现步骤：
+            1. 获取LLM实例
+            2. 定义ReAct工具函数（列表/详情/关系）
+            3. 构建工具集和Prompt模板
+            4. 创建AgentExecutor
+
         @param project_id: 项目ID
         @param token: 平台鉴权token
         @param all_apis: 项目接口池
         @return: AgentExecutor（含工具注册与Prompt约束）
         """
+        # 获取LLM实例
         llm = llm_service._get_llm()
         if llm is None:
             raise RuntimeError("llm_not_configured")
+        # 获取平台客户端
         platform_client = get_platform_client(token)
 
+        # 定义工具1：获取接口列表
         def get_api_list(_: str) -> str:
             payload = [
                 {
@@ -327,11 +485,14 @@ class AgentService:
             ]
             return json.dumps(payload, ensure_ascii=False)
 
+        # 定义工具2：获取接口详情
         def get_api_detail(api_id: str) -> str:
             detail = platform_client.get_api_detail(str(api_id).strip())
             return json.dumps(detail or {}, ensure_ascii=False)
 
+        # 定义工具3：获取接口依赖关系
         def get_api_relation(api_id: str) -> str:
+            # 查找目标接口
             target = None
             for item in all_apis:
                 if isinstance(item, dict) and str(item.get("id")) == str(api_id):
@@ -339,8 +500,10 @@ class AgentService:
                     break
             if target is None:
                 return "[]"
+            # 提取路径片段用于关联匹配
             path = str(target.get("path") or target.get("url") or "").strip("/")
             segments = [seg for seg in path.split("/") if seg]
+            # 查找相关接口
             related: List[Dict[str, Any]] = []
             for item in all_apis:
                 if not isinstance(item, dict):
@@ -349,6 +512,7 @@ class AgentService:
                 current_path = str(item.get("path") or item.get("url") or "")
                 if current_id == str(api_id):
                     continue
+                # 路径片段匹配
                 if any(seg and seg in current_path for seg in segments):
                     related.append(
                         {
@@ -359,7 +523,8 @@ class AgentService:
                     )
             return json.dumps(related[:5], ensure_ascii=False)
 
-        tools = [  # ReAct工具集：列表、详情、关系、规划
+        # 构建ReAct工具集
+        tools = [
             Tool(
                 name="get_api_list",
                 func=get_api_list,
@@ -378,6 +543,7 @@ class AgentService:
                 description="输入接口id，返回接口依赖关系",
             ),
         ]
+        # 构建Prompt模板
         prompt = PromptTemplate.from_template(
             "你是测试用例生成规划代理。\n"
             "你必须先调用get_api_list，再按用户需求筛选流程相关接口。\n"
@@ -388,6 +554,7 @@ class AgentService:
             "可用工具：\n{tools}\n\n工具名：{tool_names}\n\n"
             "Question: {input}\nThought: {agent_scratchpad}"
         )
+        # 创建Agent
         agent = create_react_agent(llm, tools, prompt)
         return AgentExecutor(
             agent=agent,
@@ -411,8 +578,10 @@ class AgentService:
         2) 失败时回退关键词打分；
         3) 流程类需求至少补足多接口链路。
         """
+        # 边界检查：空接口池直接返回
         if not all_apis:
             return []
+        # 语义分组：建立业务场景与关键词的映射关系
         query = user_requirement.lower()
         semantic_groups = {
             "login": ["登录", "signin", "login", "auth", "token", "oauth", "session"],
@@ -420,13 +589,14 @@ class AgentService:
             "user": ["用户", "user", "account", "账号", "个人信息"],
             "flow": ["流程", "链路", "闭环", "完整", "前后", "先后", "场景"],
         }
+        # 匹配用户需求中的语义分组
         matched_groups = [
             group
             for group, cues in semantic_groups.items()
             if any(cue.lower() in query for cue in cues)
         ]
+        # 策略1：优先走 ReAct 工具链，拿到可解释的 api_ids
         try:
-            # 关键阶段：优先走 ReAct 工具链，拿到可解释的 api_ids。
             executor = self._build_case_selector_executor(project_id, token, all_apis)
             result = executor.invoke({"input": user_requirement})
             output = result.get("output") if isinstance(result, dict) else ""
@@ -434,6 +604,7 @@ class AgentService:
             api_ids = parsed.get("api_ids") if isinstance(parsed, dict) else []
             ids = [str(item) for item in api_ids if str(item)]
             if ids:
+                # 流程类需求需补足多接口链路
                 if "flow" in matched_groups and len(ids) < 2:
                     available = [
                         str(item.get("id"))
@@ -451,7 +622,8 @@ class AgentService:
                 return ids[:5]
         except Exception:
             pass
-        ranked: List[Dict[str, Any]] = []  # 回退阶段：关键词打分
+        # 策略2：回退阶段，使用关键词打分筛选接口
+        ranked: List[Dict[str, Any]] = []
         for item in all_apis:
             if not isinstance(item, dict):
                 continue
@@ -461,16 +633,19 @@ class AgentService:
             name = str(item.get("name") or "").lower()
             path = str(item.get("path") or item.get("url") or "").lower()
             description = str(item.get("description") or "").lower()
+            # 关键词匹配计分
             score = 0
             corpus = f"{name} {path} {description}"
             for token_item in re.split(r"[\s,，。;；]+", query):
                 token_item = token_item.strip()
                 if token_item and token_item in corpus:
                     score += 1
+            # 语义分组加权
             for group in matched_groups:
                 cues = semantic_groups.get(group, [])
                 if any(cue.lower() in corpus for cue in cues):
                     score += 3
+            # 流程组合加权：注册+登录场景
             if "flow" in matched_groups and any(
                 tag in matched_groups for tag in ["login", "register", "user"]
             ):
@@ -481,10 +656,12 @@ class AgentService:
                 ):
                     score += 2
             ranked.append({"id": current_id, "score": score})
+        # 排序并返回Top5
         ranked.sort(key=lambda x: x.get("score", 0), reverse=True)
         top = [item["id"] for item in ranked if item.get("score", 0) > 0][:5]
         if top:
             return top
+        # 兜底策略：返回前3个接口ID
         fallback = [
             str(item.get("id"))
             for item in all_apis
@@ -556,7 +733,7 @@ class AgentService:
             "4. 至少生成2个步骤（可包含正向和异常场景）\n"
             "5. 每个步骤补全apiMethod、apiPath、apiName（从接口列表复制）\n\n"
             "## 输出格式\n"
-            "你必须输出合法 JSON 对象，以便 response_format={\"type\":\"json_object\"} 直接解析。\n"
+            '你必须输出合法 JSON 对象，以便 response_format={"type":"json_object"} 直接解析。\n'
             "直接输出JSON对象，不要任何解释或Markdown标记。\n"
             "不需要包含后端自动生成字段（如createTime、updateTime、createUser）。\n"
         )
@@ -568,6 +745,21 @@ class AgentService:
         api_details: List[Dict[str, Any]],
         api_relations: Optional[Dict[str, List[str]]] = None,
     ) -> Dict[str, Any]:
+        """
+        用例标准化校验
+
+        实现步骤：
+            1. 校验并填充必填字段
+            2. 过滤无效接口ID
+            3. 补全步骤元数据
+            4. 确保至少2个步骤
+
+        @param project_id: 项目ID
+        @param case_obj: LLM生成的原始用例
+        @param api_details: 接口详情列表
+        @param api_relations: 接口依赖关系
+        @return: 标准化后的用例字典
+        """
         first_api = api_details[0] if api_details else {}
         valid_api_ids = {
             str(item.get("id"))
@@ -579,6 +771,8 @@ class AgentService:
         module_name = str(first_api.get("moduleName") or "默认模块")
         now_name = f"AI生成用例-{datetime.now().strftime('%m%d%H%M%S')}"
         normalized = dict(case_obj or {})
+
+        # 步骤1：填充必填字段
         normalized["id"] = str(normalized.get("id") or "")
         normalized["num"] = int(normalized.get("num") or 0)
         normalized["name"] = str(normalized.get("name") or now_name)
@@ -603,6 +797,8 @@ class AgentService:
             else {}
         )
         normalized["status"] = str(normalized.get("status") or "正常")
+
+        # 步骤2：处理用例步骤
         steps = (
             normalized.get("caseApis")
             if isinstance(normalized.get("caseApis"), list)
@@ -619,15 +815,20 @@ class AgentService:
                 )
             if not api_id or api_id not in valid_api_ids:
                 continue
+
+            # 获取接口元数据
             api_meta = next(
                 (item for item in api_details if str(item.get("id")) == api_id), {}
             )
+
+            # 处理依赖关系
             relation = (
                 step.get("relation") if isinstance(step.get("relation"), list) else []
             )
             if not relation:
                 upstream = relation_map.get(api_id, [])
                 relation = [{"apiId": str(item)} for item in upstream[:2] if str(item)]
+
             normalized_steps.append(
                 {
                     "id": str(step.get("id") or ""),
@@ -684,6 +885,8 @@ class AgentService:
                     ),
                 }
             )
+
+        # 步骤3：补足步骤数量（至少2个）
         if len(normalized_steps) < 2 and api_details:
             used_ids = {str(item.get("apiId") or "") for item in normalized_steps}
             for api_meta in api_details:
@@ -724,6 +927,8 @@ class AgentService:
                 used_ids.add(api_id)
                 if len(normalized_steps) >= 2:
                     break
+
+        # 补充异常场景步骤
         if len(normalized_steps) < 2 and api_details:
             primary = api_details[0]
             idx = len(normalized_steps) + 1
@@ -752,8 +957,12 @@ class AgentService:
                     "apiPath": str(primary.get("path") or primary.get("url") or ""),
                 }
             )
+
+        # 重新编号：确保索引连续
         for idx, step in enumerate(normalized_steps):
             step["index"] = idx + 1
+
+        # 填充空列表字段
         normalized["caseApis"] = normalized_steps
         normalized["caseWebs"] = []
         normalized["caseApps"] = []
@@ -811,11 +1020,14 @@ class AgentService:
     ) -> Dict[str, Any]:
         """
         非流式聊天入口。
-        自动分流：若识别为“用例需求”则走Agent生成流程，否则走RAG增强问答流程。
+
+        自动分流：若识别为"用例需求"则走Agent生成流程，否则走RAG增强问答流程。
         """
+        # 输入校验
         msg = (message or "").strip()
         if not msg:
             return {"reply": "请先输入问题"}
+        # 判断是否为用例生成需求
         if _is_case_request(msg):
             result = self.generate_case(
                 project_id, token, msg, selected_apis=[], messages=messages or []
@@ -826,12 +1038,14 @@ class AgentService:
                     "case": result.get("case"),
                 }
             return {"reply": result.get("message") or "用例生成失败，请更换描述"}
+        # 走RAG增强问答流程
         docs: List[Dict[str, Any]] = []
         rag_status = ""
         if use_rag:
             rag_result = rag_service.search_with_status(project_id, msg, top_k=5)
             docs = rag_result.get("data", [])
             rag_status = str(rag_result.get("status") or "")
+        # 构建Prompt并调用LLM
         prompt = self._build_chat_prompt(msg, docs, rag_status)
         chat_messages = _normalize_messages(messages)
         chat_messages.append({"role": "user", "content": prompt})
@@ -848,6 +1062,7 @@ class AgentService:
     ):
         """
         SSE流式对话生成器。
+        
         @param project_id: 项目ID
         @param token: 平台鉴权token
         @param message: 当前轮输入
@@ -863,15 +1078,18 @@ class AgentService:
         - {"type": "content", "delta": "..."} 增量文本
         - {"type": "case", "case": {...}, "api_ids": [...]} 用例草稿
         """
+        # 输入校验
         msg = (message or "").strip()
         if not msg:
             yield {"type": "content", "delta": "请先输入问题"}
             return
+        # 判断是否为用例生成需求
         if _is_case_request(msg):
             yield {"type": "content", "delta": "正在生成用例，请稍候..."}
+            # 后台线程执行耗时用例生成
             with ThreadPoolExecutor(
                 max_workers=1
-            ) as executor:  # 后台线程执行耗时用例生成
+            ) as executor:
                 future = executor.submit(
                     self.generate_case,
                     project_id,
@@ -880,10 +1098,12 @@ class AgentService:
                     [],
                     messages or [],
                 )
-                while not future.done():  # 主线程持续输出心跳，避免前端长时间无首包
+                # 主线程持续输出心跳，避免前端长时间无首包
+                while not future.done():
                     time.sleep(0.15)
                     yield {"type": "content", "delta": " "}
                 result = future.result()
+            # 生成成功，返回用例
             if result.get("status") == "success":
                 yield {
                     "type": "content",
@@ -895,18 +1115,21 @@ class AgentService:
                     "api_ids": result.get("existing_api_ids", []),
                 }
                 return
+            # 生成失败
             yield {
                 "type": "content",
                 "delta": "\n"
                 + str(result.get("message") or "用例生成失败，请更换描述"),
             }
             return
+        # 走RAG增强问答流程
         rag_docs: List[Dict[str, Any]] = []
         rag_status = ""
         if use_rag:
             rag_result = rag_service.search_with_status(project_id, msg, top_k=5)
             rag_docs = rag_result.get("data", [])
             rag_status = str(rag_result.get("status") or "")
+        # 构建Prompt
         final_prompt = self._build_chat_prompt(msg, rag_docs, rag_status)
         chat_messages = _normalize_messages(messages)
         chat_messages.append({"role": "user", "content": final_prompt})
@@ -914,9 +1137,10 @@ class AgentService:
         has_output = False
         try:
             yield {"type": "content", "delta": "正在思考，请稍候..."}
+            # 后台线程拉取LLM流，主线程负责SSE节奏
             with ThreadPoolExecutor(
                 max_workers=1
-            ) as executor:  # 后台线程拉取LLM流，主线程负责SSE节奏
+            ) as executor:
                 future = executor.submit(
                     lambda: list(
                         llm_service.chat_with_stream(
@@ -924,10 +1148,12 @@ class AgentService:
                         )
                     )
                 )
-                while not future.done():  # 心跳字符用于强制刷新前端流式状态
+                # 心跳字符用于强制刷新前端流式状态
+                while not future.done():
                     time.sleep(0.12)
                     yield {"type": "content", "delta": " "}
                 stream_chunks = future.result()
+            # 遍历输出流式内容
             for delta in stream_chunks:
                 if delta:
                     has_output = True

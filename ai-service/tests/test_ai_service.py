@@ -189,6 +189,39 @@ def test_rag_add_and_search(monkeypatch):
     assert len(results) > 0
 
 
+def test_rag_should_backfill_parent_context_when_child_hit(monkeypatch):
+    from app.services.rag_service import rag_service
+
+    rag_service._embedding_func = DummyEmbeddings()
+    rag_service._client = FakeClient()
+    rag_service._collection = None
+
+    project_id = "test_project_parent_backfill"
+    parent_content = (
+        "# 登录接口\n"
+        "登录成功会返回token和refreshToken。\n"
+        "登录失败会返回401并提示密码错误。\n"
+        "前端收到401后应引导用户重试。"
+    )
+    docs = [
+        {
+            "content": "登录失败会返回401并提示密码错误。",
+            "metadata": {
+                "parent_id": "p0",
+                "parent_content": parent_content,
+                "child_index": 0,
+            },
+        }
+    ]
+    rag_service.add_document(project_id, "doc_parent_1", "manual", "登录文档", docs)
+
+    results = rag_service.search(project_id, "登录失败返回什么", top_k=1)
+    assert len(results) == 1
+    assert "上文片段：" in str(results[0].get("content") or "")
+    assert "parent_context" in results[0]
+    assert "前端收到401后应引导用户重试" in str(results[0].get("parent_context") or "")
+
+
 def test_rag_reindex_same_knowledge(monkeypatch):
     from app.services.rag_service import rag_service
 

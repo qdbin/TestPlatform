@@ -2,13 +2,15 @@
 
 # Python
 **/__pycache__/
+**/.pytest_cache/
 *.pyc
 *.pyo
 *.pyd
 venv/
 env
 .idea
-log/
+**/log/
+**/logs/
 Dockerfile
 .trae/
 .vscode/
@@ -18,3 +20,4 @@ target/
 *.ipr
 data
 **/chromedriver.exe
+*.log

@@ -1,27 +1,17 @@
-# AI服务配置
-# 注意：实际部署时请使用环境变量
-
 # LLM配置
 llm:
   provider: "deepseek" # deepseek/openai/anthropic/qwen
-  model: "deepseek-chat"  # DeepSeek-V3模型
+  model: "deepseek-chat"
   api_key: "sk-204632e546384c0796afbf44d7c8e232"
   base_url: "https://api.deepseek.com/v1"
   temperature: 0.7
   max_tokens: 2000
 
 # Embedding配置
-# provider可选值:
-#   - ollama: 本地部署Ollama，完全免费，需要先安装Ollama并拉取模型
-#   - openai: 使用OpenAI兼容API（支持第三方中转）
 embedding:
   provider: "ollama"  # ollama/openai
-  
-  # Ollama配置（本地部署，完全免费）
   ollama_url: "http://localhost:11434"
   ollama_model: "nomic-embed-text"  # 推荐: nomic-embed-text, mxbai-embed-large, all-minilm
-  
-  # 第三方中转 api.gpt.ge
   openai_api_key: "sk-nUBEeoCenvXGiz8I22E6655730E64bD2B78e0752E4342598"
   openai_base_url: "https://api.gpt.ge/v1"
   openai_model: "text-embedding-3-small"  # 支持: text-embedding-3-small, text-embedding-ada-002等
@@ -33,7 +23,7 @@ vector_store:
 
 reranker:
   mode: "local_model"  # local_model/http
-  model: "BAAI/bge-reranker-v2-m3"
+  model: "dengcao/bge-reranker-v2-m3"
   base_url: "http://localhost:11434"
   timeout: 20
 

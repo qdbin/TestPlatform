@@ -1,13 +1,19 @@
 """
-RAG检索服务模块。
+RAG检索服务模块
 
 职责：
-1) 管理 Embedding 组件与 Chroma 向量库连接。
-2) 将文档分片写入向量库并维护 project/doc 级隔离。
-3) 执行“关键词 + 向量”混合检索并输出统一状态码。
+    1. 管理 Embedding 组件与 Chroma 向量库连接
+    2. 将文档分片写入向量库并维护 project/doc 级隔离
+    3. 执行"关键词 + 向量"混合检索并输出统一状态码
+
+核心类：
+    - RAGService: RAG核心服务（检索增强生成）
+    - OpenAIEmbeddingFunction: OpenAI 兼容 Embedding 适配器
+    - OllamaEmbeddingFunction: Ollama 本地 Embedding 适配器
 """
 
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Tuple
+import re
 import chromadb
 from chromadb.config import Settings
 import httpx
@@ -155,12 +161,15 @@ class RAGService:
         2) 初始化 embedding 函数并记录降级状态。
         3) 初始化 Chroma PersistentClient。
         """
+        # 检查是否需要初始化
         if self._embedding_func is None and not self._embedding_init_failed:
+            # 获取Embedding provider配置
             provider = config.get("embedding.provider", "ollama")
 
+            # OpenAI兼容模式初始化
             if provider == "openai":
-                # OpenAI兼容模式，适配官方与兼容网关。
                 try:
+                    # 读取OpenAI配置
                     api_key = config.get("embedding.openai_api_key", "")
                     base_url = config.get(
                         "embedding.openai_base_url", "https://api.openai.com/v1"
@@ -168,8 +177,10 @@ class RAGService:
                     model = config.get(
                         "embedding.openai_model", "text-embedding-3-small"
                     )
+                    # 检查API Key
                     if not api_key:
                         raise ValueError("未配置OpenAI API Key")
+                    # 创建Embedding函数
                     self._embedding_func = OpenAIEmbeddingFunction(
                         api_key, base_url, model
                     )
@@ -183,15 +194,17 @@ class RAGService:
                     app_logger.error("OpenAI Embedding加载失败: {}", str(e))
                     self._embedding_func = None
                     self._embedding_init_failed = True
+            # Ollama本地模式初始化
             elif provider == "ollama":
-                # Ollama本地模式，适合离线或低成本部署。
                 try:
+                    # 读取Ollama配置
                     ollama_url = config.get(
                         "embedding.ollama_url", "http://localhost:11434"
                     )
                     ollama_model = config.get(
                         "embedding.ollama_model", "nomic-embed-text"
                     )
+                    # 创建Embedding函数
                     self._embedding_func = OllamaEmbeddingFunction(
                         ollama_url, ollama_model
                     )
@@ -208,6 +221,7 @@ class RAGService:
                 self._embedding_func = None
                 self._embedding_init_failed = True
 
+        # 初始化Chroma客户端
         if self._client is None:
             self._client = chromadb.PersistentClient(
                 path=config.chroma_persist_dir,
@@ -215,8 +229,11 @@ class RAGService:
             )
 
     def _get_or_create_collection(self):
+        """获取或创建Chroma集合"""
+        # 确保组件已初始化
         if self._client is None:
             self._init_components()
+        # 获取或创建集合
         if self._collection is None:
             self._collection = self._client.get_or_create_collection(
                 name=config.chroma_collection_name,
@@ -227,16 +244,21 @@ class RAGService:
     def _fallback_embed(self, text: str, dims: int = 768) -> List[float]:
         """
         降级向量算法（哈希分桶）。
+
         @param text: 原始文本
         @param dims: 向量维度，默认 768（兼容主流 embedding 维度）
         @return: 归一化后的伪向量
         """
+        # 初始化向量数组
         values = [0.0] * dims
         source = str(text or "")
+        # 空文本直接返回零向量
         if not source:
             return values
+        # 字符哈希累加
         for i, ch in enumerate(source):
             values[i % dims] += (ord(ch) % 997) / 997.0
+        # 归一化处理
         length = max(1, len(source))
         return [item / length for item in values]
 
@@ -245,25 +267,28 @@ class RAGService:
     ) -> Tuple[List[List[float]], bool]:
         """
         文档向量化（含降级）。
+
         返回值: (embeddings, used_fallback)
         """
-        if self._embedding_func is not None:  # 主路径：真实 embedding
+        # 优先使用真实Embedding
+        if self._embedding_func is not None:
             try:
                 vectors = self._embedding_func.embed_documents(documents)
                 if vectors and len(vectors) == len(documents):
                     return vectors, False
             except Exception:
                 pass
-        return [
-            self._fallback_embed(item) for item in documents
-        ], True  # 降级路径：哈希伪向量
+        # 降级：使用哈希伪向量
+        return [self._fallback_embed(item) for item in documents], True
 
     def _embed_query_with_fallback(self, query: str) -> Tuple[List[float], bool]:
         """
         查询向量化（含降级）。
+
         @param query: 用户检索问题
         @return: (query_vector, used_fallback)
         """
+        # 优先使用真实Embedding
         if self._embedding_func is not None:
             try:
                 vector = self._embedding_func.embed_query(query)
@@ -271,6 +296,7 @@ class RAGService:
                     return vector, False
             except Exception:
                 pass
+        # 降级：使用哈希伪向量
         return self._fallback_embed(query), True
 
     def _format_chunk_document(self, doc_name: str, doc_type: str, chunk: str) -> str:
@@ -406,27 +432,109 @@ class RAGService:
             return f"{doc_id}:{chunk_index}:{parent_id}"
         return str(item.get("content") or "")[:200]
 
+    def _extract_chunk_body(self, content: str) -> str:
+        text = str(content or "").strip()
+        if not text:
+            return ""
+        if "\n\n" not in text:
+            return text
+        parts = [part.strip() for part in text.split("\n\n") if part.strip()]
+        if not parts:
+            return text
+        return parts[-1]
+
+    def _build_parent_fragment(
+        self, parent_content: str, child_content: str, query: str
+    ) -> str:
+        source = str(parent_content or "").strip()
+        if not source:
+            return ""
+        max_chars = int(config.get("rag.parent_backfill_max_chars", 360))
+        window = int(config.get("rag.parent_backfill_window", 120))
+        child_body = self._extract_chunk_body(child_content)
+        anchors = [child_body[:90], str(query or "").strip()]
+        idx = -1
+        for anchor in anchors:
+            anchor = str(anchor or "").strip()
+            if not anchor:
+                continue
+            idx = source.find(anchor)
+            if idx >= 0:
+                break
+        if idx < 0:
+            for token in re.split(r"[^\w\u4e00-\u9fff]+", str(query or "").lower()):
+                if len(token) < 2:
+                    continue
+                low_source = source.lower()
+                low_idx = low_source.find(token)
+                if low_idx >= 0:
+                    idx = low_idx
+                    break
+        if idx < 0:
+            idx = 0
+        start = max(0, idx - window)
+        end = min(len(source), start + max_chars)
+        fragment = source[start:end].strip()
+        if start > 0:
+            fragment = "..." + fragment
+        if end < len(source):
+            fragment = fragment + "..."
+        return fragment
+
+    def _apply_parent_backfill(
+        self, items: List[Dict[str, Any]], query: str
+    ) -> List[Dict[str, Any]]:
+        if not config.get("rag.parent_backfill_enabled", True):
+            return items
+        merged: List[Dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            metadata = (
+                item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            )
+            parent_content = str(metadata.get("parent_content") or "").strip()
+            content = str(item.get("content") or "").strip()
+            if not parent_content or not content:
+                merged.append(item)
+                continue
+            if parent_content in content:
+                merged.append(item)
+                continue
+            fragment = self._build_parent_fragment(parent_content, content, query)
+            if not fragment:
+                merged.append(item)
+                continue
+            enriched = dict(item)
+            enriched["parent_context"] = fragment
+            enriched["content"] = f"{content}\n\n上文片段：\n{fragment}"
+            merged.append(enriched)
+        return merged
+
     def _vector_search(
         self, project_id: str, query: str, top_k: int
     ) -> Tuple[str, List[Dict[str, Any]]]:
         """
         纯向量检索。
+
         返回值status:
         - success: 正常Embedding检索
         - fallback: 使用降级Embedding检索
         - embedding_unavailable: 无可用向量
         """
-        query_embedding, used_fallback = self._embed_query_with_fallback(
-            query
-        )  # 阶段1：查询向量化
+        # 阶段1：查询向量化
+        query_embedding, used_fallback = self._embed_query_with_fallback(query)
+        # 向量为空时直接返回
         if not query_embedding:
             return "embedding_unavailable", []
+        # 执行向量检索
         collection = self._get_or_create_collection()
         results = collection.query(
             query_embeddings=[query_embedding],
             n_results=top_k,
             where={"project_id": project_id},
         )
+        # 阶段2：格式统一
         formatted_results = []
         if results.get("documents") and results["documents"][0]:
             for i, doc in enumerate(results["documents"][0]):
@@ -445,21 +553,23 @@ class RAGService:
                         ),
                     }
                 )
-        return (
-            "fallback" if used_fallback else "success"
-        ), formatted_results  # 阶段2：格式统一
+        return ("fallback" if used_fallback else "success"), formatted_results
 
     def _keyword_search(
         self, project_id: str, query: str, top_k: int
     ) -> List[Dict[str, Any]]:
         """
         关键词召回。
+
         目的：在 embedding 不稳定或语义向量未命中时提供可解释兜底。
         """
+        # 获取集合
         collection = self._get_or_create_collection()
+        # 获取项目文档
         source = self._safe_collection_get(collection, {"project_id": project_id})
         documents = source.get("documents") or []
         metadatas = source.get("metadatas") or []
+        # 类型检查
         if not isinstance(documents, list):
             documents = []
         if not isinstance(metadatas, list):
@@ -477,26 +587,32 @@ class RAGService:
         project_id = str(project_id)
         self._init_components()
         try:
+            # 对每个查询词分别进行关键词和向量检索
             expanded_queries = query_rewriter.rewrite_and_expand(query)
             keyword_hits: List[Dict[str, Any]] = []
             vector_hits: List[Dict[str, Any]] = []
             vector_status = "no_context"
+            # 遍历展开后的查询词
             for current_query in expanded_queries:
+                # 关键词检索
                 keyword_hits.extend(
                     self._keyword_search(project_id, current_query, top_k)
                 )
+                # 向量检索
                 current_status, current_vector_hits = self._vector_search(
                     project_id, current_query, top_k
                 )
                 if current_status in {"success", "fallback"}:
                     vector_status = current_status
                 vector_hits.extend(current_vector_hits)
+            # 合并去重：关键词结果
             merged_map: Dict[str, Dict[str, Any]] = {}
             for rank, item in enumerate(keyword_hits):
                 key = self._build_merge_key(item)
                 base = merged_map.get(key, {"item": item, "score": 0.0})
                 base["score"] += 1.0 / (rank + 1)
                 merged_map[key] = base
+            # 合并去重：向量结果（加权融合）
             for rank, item in enumerate(vector_hits):
                 key = self._build_merge_key(item)
                 distance = float(item.get("distance") or 0.0)
@@ -508,16 +624,19 @@ class RAGService:
                         float(base["item"].get("distance") or 1.0), distance
                     )
                 merged_map[key] = base
+            # 按得分排序
             ranked = sorted(
                 merged_map.values(),
                 key=lambda value: float(value.get("score") or 0),
                 reverse=True,
             )
+            # 扩展候选集
             merged = []
             for entry in ranked[: max(top_k * 3, top_k)]:
                 item = entry["item"]
                 item["hybrid_score"] = float(entry.get("score") or 0)
                 merged.append(item)
+            # 精排重排
             reranked = reranker.rerank(query, merged, top_k=top_k)
             app_logger.info(
                 "rag_search project={} query={} expanded={} hybrid_candidates={} final={}",
@@ -527,7 +646,9 @@ class RAGService:
                 len(merged),
                 len(reranked),
             )
-            merged = reranked
+            # 父文档回填
+            merged = self._apply_parent_backfill(reranked, query)
+            # 返回结果
             if merged:
                 return {"status": "success", "data": merged}
             if vector_status == "embedding_unavailable":

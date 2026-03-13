@@ -1,6 +1,6 @@
 """
 平台API客户端工具
-用于Agent调用流马平台API获取数据
+用于Agent调用平台API获取数据
 """
 
 import httpx
@@ -123,7 +123,6 @@ class PlatformClient:
             self._mark_error(f"获取接口详情失败: {e}")
             return None
 
-
     def get_case_schema(self, project_id: str) -> Dict[str, Any]:
         """
         获取后端CaseRequest相关Schema，供Agent约束输出结构。
@@ -149,5 +148,48 @@ class PlatformClient:
             self._mark_error(f"获取Case Schema失败: {e}")
             return {}
 
+
 def get_platform_client(token: Optional[str] = None) -> PlatformClient:
     return PlatformClient(api_key=token or "")
+
+
+if __name__ == "__main__":
+    """
+    平台API客户端调试代码
+
+    调试说明：
+        1. 测试获取接口列表
+        2. 测试获取接口详情
+        3. 测试获取用例Schema
+
+    注意：需要正确配置 PLATFORM_BASE_URL
+    """
+    print("=" * 60)
+    print("平台API客户端调试")
+    print("=" * 60)
+
+    # 测试1：获取接口列表
+    print("\n1. 获取接口列表测试:")
+    client = get_platform_client(token="test-token")
+    print(f"   平台地址: {client.base_url}")
+    api_list = client.get_api_list("test-project")
+    print(f"   接口数量: {len(api_list)}")
+    if api_list:
+        print(f"   第一个接口: {api_list[0].get('name')}")
+
+    # 测试2：获取接口详情
+    print("\n2. 获取接口详情测试:")
+    if api_list and len(api_list) > 0:
+        first_api_id = api_list[0].get("id")
+        api_detail = client.get_api_detail(str(first_api_id))
+        print(f"   接口ID: {first_api_id}")
+        print(f"   获取结果: {'成功' if api_detail else '失败'}")
+
+    # 测试3：获取用例Schema
+    print("\n3. 获取用例Schema测试:")
+    schema = client.get_case_schema("test-project")
+    print(f"   Schema keys: {list(schema.keys()) if schema else '空'}")
+
+    print("\n" + "=" * 60)
+    print("调试完成")
+    print("=" * 60)
