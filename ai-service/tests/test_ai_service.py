@@ -279,7 +279,12 @@ def test_chat_stream_sse_format(monkeypatch, client: TestClient):
     from app.services import agent_service as agent_service_module
 
     def fake_stream_chat(
-        project_id: str, token: str, message: str, use_rag: bool, messages=None
+        project_id: str,
+        token: str,
+        message: str,
+        use_rag: bool,
+        messages=None,
+        user_id="",
     ):
         yield {"type": "content", "delta": "O"}
         yield {"type": "content", "delta": "K"}
@@ -307,7 +312,12 @@ def test_chat_stream_should_flush_first_event_without_waiting(
     from app.services import agent_service as agent_service_module
 
     def fake_stream_chat(
-        project_id: str, token: str, message: str, use_rag: bool, messages=None
+        project_id: str,
+        token: str,
+        message: str,
+        use_rag: bool,
+        messages=None,
+        user_id="",
     ):
         yield {"type": "content", "delta": "正在思考，请稍候..."}
         time.sleep(0.25)
@@ -338,7 +348,7 @@ def test_agent_chat_case_via_executor(monkeypatch):
     monkeypatch.setattr(
         agent_service,
         "generate_case",
-        lambda project_id, token, user_requirement, selected_apis=None, messages=None: {
+        lambda project_id, token, user_requirement, selected_apis=None, messages=None, user_id="": {
             "status": "success",
             "case": {"name": "登录接口用例"},
         },
@@ -381,7 +391,9 @@ def test_generate_case_json_repair(monkeypatch):
         agent_service_module, "get_platform_client", lambda token: FakePlatformClient()
     )
     monkeypatch.setattr(
-        rag_service_module.rag_service, "search", lambda project_id, query, top_k=5: []
+        rag_service_module.rag_service,
+        "search",
+        lambda project_id, query, top_k=5, user_id="": [],
     )
     monkeypatch.setattr(
         llm_service_module.llm_service,
@@ -506,7 +518,7 @@ def test_rag_router_add_query_delete(monkeypatch, client: TestClient):
     monkeypatch.setattr(
         rag_service_module.rag_service,
         "add_document",
-        lambda project_id, doc_id, doc_type, doc_name, documents: {
+        lambda project_id, doc_id, doc_type, doc_name, documents, user_id="": {
             "indexed": True,
             "degraded": False,
             "vector_count": len(documents),
@@ -516,7 +528,7 @@ def test_rag_router_add_query_delete(monkeypatch, client: TestClient):
     monkeypatch.setattr(
         rag_service_module.rag_service,
         "search_with_status",
-        lambda project_id, query, top_k=5: {
+        lambda project_id, query, top_k=5, user_id="": {
             "status": "success",
             "data": [{"content": "命中内容", "metadata": {"project_id": project_id}}],
         },

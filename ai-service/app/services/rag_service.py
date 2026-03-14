@@ -14,6 +14,7 @@ RAG检索服务模块
 
 from typing import List, Dict, Any, Tuple
 import re
+import time
 import chromadb
 from chromadb.config import Settings
 import httpx
@@ -316,6 +317,7 @@ class RAGService:
         doc_type: str,
         doc_name: str,
         documents: List[Any],
+        user_id: str = "",
     ) -> Dict[str, Any]:
         """
         写入知识文档分片到向量库。
@@ -338,6 +340,8 @@ class RAGService:
         doc_id = str(doc_id)
         doc_type = str(doc_type or "manual")
         doc_name = str(doc_name or "")
+        user_id = str(user_id or "")
+        timestamp = int(time.time() * 1000)
         if not documents:
             return {
                 "indexed": False,
@@ -386,6 +390,9 @@ class RAGService:
                     "doc_id": doc_id,
                     "doc_type": doc_type,
                     "doc_name": doc_name,
+                    "user_id": user_id,
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
                     "chunk_index": i,
                     **(chunk_metas[i] if i < len(chunk_metas) else {}),
                 }
@@ -577,7 +584,7 @@ class RAGService:
         return self._bm25_retriever.search(query, documents, metadatas, top_k=top_k)
 
     def search_with_status(
-        self, project_id: str, query: str, top_k: int = 5
+        self, project_id: str, query: str, top_k: int = 5, user_id: str = ""
     ) -> Dict[str, Any]:
         """
         混合检索总入口：关键词检索 + 向量检索去重融合。
@@ -659,9 +666,11 @@ class RAGService:
             return {"status": "vector_error", "data": [], "error": str(e)}
 
     def search(
-        self, project_id: str, query: str, top_k: int = 5
+        self, project_id: str, query: str, top_k: int = 5, user_id: str = ""
     ) -> List[Dict[str, Any]]:
-        return self.search_with_status(project_id, query, top_k).get("data", [])
+        return self.search_with_status(project_id, query, top_k, user_id=user_id).get(
+            "data", []
+        )
 
     def delete_document(self, project_id: str, doc_id: str) -> Dict[str, Any]:
         """

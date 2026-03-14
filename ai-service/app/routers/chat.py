@@ -23,40 +23,16 @@ AI对话路由
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
 import json
 
+from app.schemas import ChatRequestModel
 from app.services.agent_service import agent_service
 
 router = APIRouter()
 
 
-class ChatRequest(BaseModel):
-    """
-    聊天请求模型
-
-    字段说明：
-        - project_id: 项目ID，用于数据隔离
-        - message: 当前用户消息
-        - use_rag: 是否启用知识库检索增强
-        - messages: 历史对话消息列表
-
-    messages示例：
-        [
-            {"role": "user", "content": "上个问题"},
-            {"role": "assistant", "content": "上个回答"}
-        ]
-    """
-
-    project_id: str
-    message: str
-    use_rag: bool = True
-    messages: Optional[List[Dict[str, Any]]] = None
-
-
 @router.post("/chat/stream")
-async def chat_stream(request: ChatRequest, raw_request: Request):
+async def chat_stream(request: ChatRequestModel, raw_request: Request):
     """
     AI对话接口（SSE流式输出）
 
@@ -83,7 +59,8 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
                 token=token,
                 message=request.message,
                 use_rag=request.use_rag,
-                messages=request.messages or [],
+                messages=[item.model_dump() for item in request.messages],
+                user_id=request.user_id or "",
             ):
                 # SSE标准帧格式：每个事件以双换行结尾\n\n
                 # 前端按 \n\n 分帧消费
@@ -111,11 +88,11 @@ async def chat_stream(request: ChatRequest, raw_request: Request):
 if __name__ == "__main__":
     """
     对话路由调试代码
-    
+
     调试说明：
         1. 启动服务后，可使用 curl 测试 SSE 流式输出
         2. 注意：此处仅为演示，实际需要完整的 token 认证
-    
+
     测试命令示例：
         curl -X POST http://localhost:8001/ai/chat/stream \
         -H "Content-Type: application/json" \

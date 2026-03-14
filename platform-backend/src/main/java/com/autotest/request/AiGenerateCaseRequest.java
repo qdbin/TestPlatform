@@ -8,6 +8,7 @@ import java.util.Map;
 @Data
 public class AiGenerateCaseRequest {
     private String projectId;
+    private String userId;
     private String userRequirement;
     private List<String> selectedApis;
     private List<Map<String, Object>> messages;

@@ -131,8 +131,10 @@ public class AiController {
             @RequestHeader(value = "token", required = false) String token,
             HttpServletRequest httpRequest) {
         aiPermissionService.assertProjectAccess(httpRequest, request.getProjectId());
+        String userId = aiPermissionService.getLoginUserId(httpRequest);
         Map<String, Object> payload = new HashMap<>();
         payload.put("project_id", request.getProjectId());
+        payload.put("user_id", userId);
         payload.put("user_requirement", request.getUserRequirement());
         payload.put("selected_apis", request.getSelectedApis() == null ? new ArrayList<>() : request.getSelectedApis());
         payload.put("messages", request.getMessages() == null ? new ArrayList<>() : request.getMessages());
@@ -153,6 +155,8 @@ public class AiController {
             HttpServletRequest httpRequest,
             HttpServletResponse response) {
         aiPermissionService.assertProjectAccess(httpRequest, request.getProjectId());
+        String userId = aiPermissionService.getLoginUserId(httpRequest);
+        request.setUserId(userId);
         response.setHeader("Cache-Control", "no-cache");
         response.setHeader("Connection", "keep-alive");
         response.setHeader("X-Accel-Buffering", "no");
@@ -177,8 +181,8 @@ public class AiController {
     private Map<String, Object> buildChatRequest(AiChatStreamRequest request) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("project_id", request.getProjectId());
+        payload.put("user_id", request.getUserId() == null ? "" : request.getUserId());
         payload.put("message", request.getMessage());
-        payload.put("question", request.getMessage());
         payload.put("use_rag", request.getUseRag() == null || request.getUseRag());
         payload.put("messages", request.getMessages() == null ? new ArrayList<>() : request.getMessages());
         return payload;

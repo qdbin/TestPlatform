@@ -15,17 +15,17 @@ LLM服务模块
     - chat_with_stream(): 流式对话
 """
 
-from typing import Optional, Dict, Any, List, Iterator
+from typing import Optional, Dict, Any, List, Iterator, Type, TypeVar
 import os
 
 os.environ.pop("OPENAI_PROXY", None)
-try:
-    from langchain_openai import ChatOpenAI
-except Exception:
-    from langchain_community.chat_models import ChatOpenAI
-from langchain.schema import HumanMessage, SystemMessage, AIMessage, BaseMessage
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
+from pydantic import BaseModel
 from app.config import config
 from app.observability import app_logger, langchain_console_callback
+
+StructuredModelT = TypeVar("StructuredModelT", bound=BaseModel)
 
 
 class LLMService:
@@ -93,6 +93,9 @@ class LLMService:
                 app_logger.error("LLM初始化失败: {}", str(e))
                 return None
         return self._llm
+
+    def get_chat_model(self):
+        return self._get_llm()
 
     def _build_langchain_messages(
         self, messages: List[Dict[str, str]], system_prompt: Optional[str]
@@ -215,6 +218,23 @@ class LLMService:
                 yield f"[错误: {str(e)}]"
 
         return stream_generator()
+
+    def chat_structured(
+        self,
+        messages: List[Dict[str, str]],
+        output_model: Type[StructuredModelT],
+        system_prompt: Optional[str] = None,
+    ) -> Optional[StructuredModelT]:
+        llm = self._get_llm()
+        if llm is None:
+            return None
+        langchain_messages = self._build_langchain_messages(messages, system_prompt)
+        try:
+            structured_llm = llm.with_structured_output(output_model)
+            return structured_llm.invoke(langchain_messages)
+        except Exception as exc:
+            app_logger.warning("structured_output_failed error={}", str(exc))
+            return None
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """

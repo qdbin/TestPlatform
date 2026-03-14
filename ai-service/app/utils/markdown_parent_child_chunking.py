@@ -15,21 +15,28 @@ from __future__ import annotations
 
 from typing import List, Dict, Any
 
-from langchain.text_splitter import MarkdownTextSplitter, RecursiveCharacterTextSplitter
+from langchain_text_splitters import (
+    MarkdownTextSplitter,
+    RecursiveCharacterTextSplitter,
+)
 
 
 class MarkdownParentChildChunker:
     """
     Markdown父子切片器
-    
+
     职责：
         - 按Markdown标题层级切分Parent块（保留完整语义）
         - 在Parent块内进一步细分子块（适合精确检索）
         - 通过metadata维护父子关系
     """
 
-    def __init__(self, parent_size: int = 1200, child_size: int = 400, overlap: int = 60):
-        self.parent_splitter = MarkdownTextSplitter(chunk_size=parent_size, chunk_overlap=overlap)
+    def __init__(
+        self, parent_size: int = 1200, child_size: int = 400, overlap: int = 60
+    ):
+        self.parent_splitter = MarkdownTextSplitter(
+            chunk_size=parent_size, chunk_overlap=overlap
+        )
         self.child_splitter = RecursiveCharacterTextSplitter(
             chunk_size=child_size, chunk_overlap=max(20, overlap // 2)
         )
@@ -37,15 +44,15 @@ class MarkdownParentChildChunker:
     def split(self, content: str) -> List[Dict[str, Any]]:
         """
         执行父子切片
-        
+
         实现步骤：
             1. 使用MarkdownTextSplitter按标题切分为Parent块
             2. 对每个Parent块使用RecursiveCharacterTextSplitter切分为Child块
             3. 返回带父子关系元数据的块列表
-        
+
         @param content: Markdown格式文档内容
         @return: [{"content": "...", "metadata": {...}}, ...]
-        
+
         返回格式示例：
             {
                 "content": "子块内容",
@@ -91,7 +98,7 @@ markdown_parent_child_chunker = MarkdownParentChildChunker()
 if __name__ == "__main__":
     """
     Markdown父子切片器调试代码
-    
+
     调试说明：
         1. 测试父子切片
         2. 验证层级关系
@@ -99,7 +106,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("Markdown父子切片器调试")
     print("=" * 60)
-    
+
     test_markdown = """# 登录接口
 
 ## 接口说明
@@ -118,7 +125,7 @@ if __name__ == "__main__":
 - 401: 用户名或密码错误
 - 500: 服务器异常
 """
-    
+
     # 测试切片
     print("\n1. 父子切片测试:")
     chunks = markdown_parent_child_chunker.split(test_markdown)
@@ -126,7 +133,7 @@ if __name__ == "__main__":
     for i, chunk in enumerate(chunks[:3]):
         print(f"   - 块{i+1}: {chunk['content'][:50]}...")
         print(f"     parent_id: {chunk['metadata'].get('parent_id')}")
-    
+
     print("\n" + "=" * 60)
     print("调试完成")
     print("=" * 60)

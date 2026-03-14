@@ -6,13 +6,15 @@ FastAPI主应用配置和启动
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import config
-from app.observability import app_logger
+from app.observability import app_logger, setup_langsmith
 
 # 路由导入
 from app.routers import chat, knowledge, agent
 
 
 # ==================== FastAPI 应用初始化 ====================
+setup_langsmith()
+
 # 创建FastAPI应用实例
 app = FastAPI(
     title="AI智能测试助手服务",

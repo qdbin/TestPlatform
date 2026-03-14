@@ -11,6 +11,8 @@ public class AiChatStreamRequest {
     private String projectId;
     /** 当前用户问题（必填） */
     private String message;
+    /** 用户ID（可选，透传到AI服务用于元数据） */
+    private String userId;
     /** 是否启用知识库检索，null按true处理 */
     private Boolean useRag;
     /**

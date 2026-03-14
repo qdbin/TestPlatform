@@ -41,6 +41,7 @@ class CaseWorkflowContext:
     user_requirement: str
     selected_apis: Optional[List[str]]
     messages: Optional[List[Dict[str, Any]]]
+    user_id: str = ""
 
 
 class CaseGenerationWorkflow:
@@ -161,8 +162,16 @@ class CaseGenerationWorkflow:
                 context.user_requirement,
                 all_apis,
             )
-        # 去重并限制返回数量
-        return [item for item in selected if item in all_ids][:5]
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for item in selected:
+            current = str(item)
+            if current in all_ids and current not in seen:
+                deduped.append(current)
+                seen.add(current)
+            if len(deduped) >= 5:
+                break
+        return deduped
 
     def _load_context(
         self, context: CaseWorkflowContext, selected: List[str]
@@ -188,7 +197,10 @@ class CaseGenerationWorkflow:
         api_relations = self.build_dependency_relations(api_details)
         # 检索知识库文档
         rag_docs = rag_service.search(
-            context.project_id, context.user_requirement, top_k=6
+            context.project_id,
+            context.user_requirement,
+            top_k=6,
+            user_id=context.user_id,
         )
         # 获取Case Schema
         schema_payload = platform_client.get_case_schema(context.project_id) or {}

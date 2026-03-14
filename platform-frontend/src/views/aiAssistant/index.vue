@@ -574,6 +574,7 @@ export default defineComponent({
           },
           body: JSON.stringify({
             projectId,
+            userId: getCurrentUserId(),
             message: inputMsg,
             useRag: useRag.value,
             messages: buildHistoryMessages([...baseMessages, userMsg]),

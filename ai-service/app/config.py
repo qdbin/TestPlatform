@@ -7,13 +7,14 @@ import os
 import yaml
 from pathlib import Path
 from typing import Optional, Dict, Any
+from dotenv import load_dotenv
 
 
 class Config:
     """
     配置管理单例（Singleton）
     职责：读取 config.yaml，并支持环境变量覆盖敏感配置。
-    
+
     一、配置文件加载：项目根目录下的 config.yaml
     二、环境变量覆盖：DEEPSEEK_API_KEY / OPENAI_API_KEY / PLATFORM_BASE_URL
     三、配置访问：通过 get() 方法或属性访问器获取配置值
@@ -36,7 +37,9 @@ class Config:
             2. 解析 YAML 内容到内部字典
             3. 加载环境变量覆盖
         """
-        config_path = Path(__file__).parent.parent / "config.yaml"
+        project_root = Path(__file__).parent.parent
+        load_dotenv(project_root / ".env", override=False)
+        config_path = project_root / "config.yaml"
         if config_path.exists():
             with open(config_path, "r", encoding="utf-8") as f:
                 self._config = yaml.safe_load(f) or {}
@@ -67,6 +70,18 @@ class Config:
             if "platform" not in self._config:
                 self._config["platform"] = {}
             self._config["platform"]["base_url"] = os.getenv("PLATFORM_BASE_URL")
+        if os.getenv("LANGSMITH_API_KEY"):
+            if "langsmith" not in self._config:
+                self._config["langsmith"] = {}
+            self._config["langsmith"]["api_key"] = os.getenv("LANGSMITH_API_KEY")
+        if os.getenv("LANGSMITH_PROJECT"):
+            if "langsmith" not in self._config:
+                self._config["langsmith"] = {}
+            self._config["langsmith"]["project"] = os.getenv("LANGSMITH_PROJECT")
+        if os.getenv("LANGSMITH_TRACING"):
+            if "langsmith" not in self._config:
+                self._config["langsmith"] = {}
+            self._config["langsmith"]["tracing"] = os.getenv("LANGSMITH_TRACING")
 
     def get(self, key: str, default: Any = None) -> Any:
         """
@@ -178,6 +193,21 @@ class Config:
             "server.cors_origins", ["http://localhost:5173", "http://localhost:8080"]
         )
 
+    @property
+    def langsmith_api_key(self) -> str:
+        return self.get("langsmith.api_key", "")
+
+    @property
+    def langsmith_project(self) -> str:
+        return self.get("langsmith.project", "test-platform-ai")
+
+    @property
+    def langsmith_tracing(self) -> bool:
+        value = self.get("langsmith.tracing", False)
+        if isinstance(value, bool):
+            return value
+        return str(value).lower() in {"1", "true", "yes", "on"}
+
 
 config = Config()
 
@@ -190,37 +220,43 @@ if __name__ == "__main__":
     print("=" * 50)
     print("配置模块调试")
     print("=" * 50)
-    
+
     # 基础配置访问测试
     print(f"\n1. LLM 配置:")
     print(f"   - Provider: {config.llm_provider}")
     print(f"   - Model: {config.llm_model}")
-    print(f"   - API Key: {config.llm_api_key[:10]}..." if config.llm_api_key else "   - API Key: (未设置)")
+    print(
+        f"   - API Key: {config.llm_api_key[:10]}..."
+        if config.llm_api_key
+        else "   - API Key: (未设置)"
+    )
     print(f"   - Base URL: {config.llm_base_url}")
-    
+
     print(f"\n2. Embedding 配置:")
     print(f"   - Model: {config.embedding_model}")
     print(f"   - Device: {config.embedding_device}")
-    
+
     print(f"\n3. Chroma 向量库配置:")
     print(f"   - Persist Dir: {config.chroma_persist_dir}")
     print(f"   - Collection Name: {config.chroma_collection_name}")
-    
+
     print(f"\n4. 平台配置:")
     print(f"   - Base URL: {config.platform_base_url}")
     print(f"   - Timeout: {config.platform_timeout}s")
-    
+
     print(f"\n5. 服务配置:")
     print(f"   - Host: {config.server_host}")
     print(f"   - Port: {config.server_port}")
     print(f"   - CORS Origins: {config.cors_origins}")
-    
+
     # get() 方法测试
     print(f"\n6. get() 方法测试:")
     print(f"   - config.get('llm.provider'): {config.get('llm.provider')}")
-    print(f"   - config.get('llm.nonexistent', 'default'): {config.get('llm.nonexistent', 'default')}")
+    print(
+        f"   - config.get('llm.nonexistent', 'default'): {config.get('llm.nonexistent', 'default')}"
+    )
     print(f"   - config.get('platform.base_url'): {config.get('platform.base_url')}")
-    
+
     print("\n" + "=" * 50)
     print("调试完成")
     print("=" * 50)
