@@ -162,30 +162,28 @@ class RAGService:
         2) 初始化 embedding 函数并记录降级状态。
         3) 初始化 Chroma PersistentClient。
         """
-        # 检查是否需要初始化
+        # 关键步骤：检查是否需要初始化Embedding（避免重复初始化）
         if self._embedding_func is None and not self._embedding_init_failed:
-            # 获取Embedding provider配置
-            provider = config.get("embedding.provider", "ollama")
+            provider = config.get("embedding.provider", "ollama")  # 从配置读取provider
 
-            # OpenAI兼容模式初始化
+            # 关键步骤：OpenAI兼容模式初始化
             if provider == "openai":
                 try:
-                    # 读取OpenAI配置
-                    api_key = config.get("embedding.openai_api_key", "")
+                    api_key = config.get("embedding.openai_api_key", "")  # API密钥
                     base_url = config.get(
                         "embedding.openai_base_url", "https://api.openai.com/v1"
-                    )
+                    )  # 服务地址
                     model = config.get(
                         "embedding.openai_model", "text-embedding-3-small"
-                    )
-                    # 检查API Key
+                    )  # 模型名称
                     if not api_key:
                         raise ValueError("未配置OpenAI API Key")
-                    # 创建Embedding函数
+
+                    # 关键步骤：创建OpenAI Embedding函数实例
                     self._embedding_func = OpenAIEmbeddingFunction(
                         api_key, base_url, model
                     )
-                    self._embedding_init_failed = False
+                    self._embedding_init_failed = False  # 标记初始化成功
                     app_logger.info(
                         "Embedding模型加载成功: OpenAI兼容API {} @ {}",
                         model,
@@ -194,18 +192,19 @@ class RAGService:
                 except Exception as e:
                     app_logger.error("OpenAI Embedding加载失败: {}", str(e))
                     self._embedding_func = None
-                    self._embedding_init_failed = True
-            # Ollama本地模式初始化
+                    self._embedding_init_failed = True  # 标记初始化失败，后续不再重试
+
+            # 关键步骤：Ollama本地模式初始化
             elif provider == "ollama":
                 try:
-                    # 读取Ollama配置
                     ollama_url = config.get(
                         "embedding.ollama_url", "http://localhost:11434"
-                    )
+                    )  # Ollama服务地址
                     ollama_model = config.get(
                         "embedding.ollama_model", "nomic-embed-text"
-                    )
-                    # 创建Embedding函数
+                    )  # 本地模型名称
+
+                    # 关键步骤：创建Ollama Embedding函数实例
                     self._embedding_func = OllamaEmbeddingFunction(
                         ollama_url, ollama_model
                     )
@@ -222,11 +221,13 @@ class RAGService:
                 self._embedding_func = None
                 self._embedding_init_failed = True
 
-        # 初始化Chroma客户端
+        # 关键步骤：初始化Chroma持久化客户端
         if self._client is None:
             self._client = chromadb.PersistentClient(
-                path=config.chroma_persist_dir,
-                settings=Settings(anonymized_telemetry=False, allow_reset=True),
+                path=config.chroma_persist_dir,  # 向量库持久化目录
+                settings=Settings(
+                    anonymized_telemetry=False, allow_reset=True
+                ),  # 禁用遥测，允许重置
             )
 
     def _get_or_create_collection(self):
@@ -250,16 +251,14 @@ class RAGService:
         @param dims: 向量维度，默认 768（兼容主流 embedding 维度）
         @return: 归一化后的伪向量
         """
-        # 初始化向量数组
         values = [0.0] * dims
         source = str(text or "")
-        # 空文本直接返回零向量
         if not source:
             return values
-        # 字符哈希累加
+
         for i, ch in enumerate(source):
             values[i % dims] += (ord(ch) % 997) / 997.0
-        # 归一化处理
+
         length = max(1, len(source))
         return [item / length for item in values]
 
@@ -336,12 +335,15 @@ class RAGService:
         - metadata: {"project_id":"p1","doc_id":"d1","doc_type":"manual","doc_name":"登录规范","chunk_index":0}
         - id: "p1_d1_0"
         """
-        project_id = str(project_id)
-        doc_id = str(doc_id)
-        doc_type = str(doc_type or "manual")
-        doc_name = str(doc_name or "")
-        user_id = str(user_id or "")
-        timestamp = int(time.time() * 1000)
+        # 关键步骤：参数标准化处理
+        project_id = str(project_id)  # 确保project_id为字符串
+        doc_id = str(doc_id)  # 确保doc_id为字符串
+        doc_type = str(doc_type or "manual")  # 默认类型为manual
+        doc_name = str(doc_name or "")  # 文档名
+        user_id = str(user_id or "")  # 用户ID
+        timestamp = int(time.time() * 1000)  # 毫秒时间戳
+
+        # 关键步骤：空文档检查
         if not documents:
             return {
                 "indexed": False,
@@ -349,25 +351,31 @@ class RAGService:
                 "vector_count": 0,
                 "error": "empty_documents",
             }
+
+        # 关键步骤：文档分片标准化处理
         normalized_docs: List[str] = []
         chunk_metas: List[Dict[str, Any]] = []
         for item in documents:
             if isinstance(item, dict):
-                content = str(item.get("content") or "").strip()
+                content = str(item.get("content") or "").strip()  # 提取内容
                 extra_meta = (
                     item.get("metadata")
                     if isinstance(item.get("metadata"), dict)
                     else {}
-                )
+                )  # 提取额外元数据
             else:
                 content = str(item or "").strip()
                 extra_meta = {}
             if not content:
                 continue
+
+            # 关键步骤：格式化分片文档（添加文档名和类型前缀）
             normalized_docs.append(
                 self._format_chunk_document(doc_name, doc_type, content)
             )
             chunk_metas.append(extra_meta)
+
+        # 关键步骤：检查标准化后的文档是否为空
         if not normalized_docs:
             return {
                 "indexed": False,
@@ -375,29 +383,42 @@ class RAGService:
                 "vector_count": 0,
                 "error": "empty_documents",
             }
+
+        # 关键步骤：初始化组件
         self._init_components()
         try:
             collection = self._get_or_create_collection()
-            # 关键阶段：先删后写，保证重建索引不残留旧向量。
+
+            # 关键步骤：先删后写，保证重建索引不残留旧向量
             collection.delete(where=self._doc_where(project_id, doc_id))
+
+            # 关键步骤：文档向量化（含降级）
             embeddings, used_fallback = self._embed_documents_with_fallback(
                 normalized_docs
             )
+
+            # 关键步骤：生成向量ID（格式：project_id_doc_id_index）
             ids = [f"{project_id}_{doc_id}_{i}" for i in range(len(normalized_docs))]
+
+            # 关键步骤：构建元数据列表
             metadatas = [
                 {
-                    "project_id": project_id,
-                    "doc_id": doc_id,
-                    "doc_type": doc_type,
-                    "doc_name": doc_name,
-                    "user_id": user_id,
-                    "created_at": timestamp,
-                    "updated_at": timestamp,
-                    "chunk_index": i,
-                    **(chunk_metas[i] if i < len(chunk_metas) else {}),
+                    "project_id": project_id,  # 项目ID（数据隔离）
+                    "doc_id": doc_id,  # 文档ID
+                    "doc_type": doc_type,  # 文档类型
+                    "doc_name": doc_name,  # 文档名
+                    "user_id": user_id,  # 用户ID
+                    "created_at": timestamp,  # 创建时间
+                    "updated_at": timestamp,  # 更新时间
+                    "chunk_index": i,  # 分片索引
+                    **(
+                        chunk_metas[i] if i < len(chunk_metas) else {}
+                    ),  # 合并额外元数据
                 }
                 for i in range(len(normalized_docs))
             ]
+
+            # 关键步骤：写入向量库（upsert支持更新）
             collection.upsert(
                 embeddings=embeddings,
                 documents=normalized_docs,
@@ -522,26 +543,38 @@ class RAGService:
         self, project_id: str, query: str, top_k: int
     ) -> Tuple[str, List[Dict[str, Any]]]:
         """
-        纯向量检索。
+        纯向量语义检索
 
-        返回值status:
-        - success: 正常Embedding检索
-        - fallback: 使用降级Embedding检索
-        - embedding_unavailable: 无可用向量
+        实现步骤：
+            1. 将用户查询转换为向量表示（Embedding）
+            2. 调用 Chroma 向量库执行相似度搜索
+            3. 格式化返回结果（content/distance/metadata）
+            4. 返回检索状态和结果列表
+
+        @param project_id: 项目ID（用于数据隔离）
+        @param query: 用户查询文本
+        @param top_k: 召回数量
+        @return: Tuple[status, results]
+            - status: 检索状态
+              - success: 正常Embedding检索
+              - fallback: 使用降级哈希向量检索
+              - embedding_unavailable: 无可用向量服务
+            - results: 检索结果列表
+
+        Chroma查询参数说明：
+            - query_embeddings: 查询向量列表
+            - n_results: 返回结果数量
+            - where: 过滤条件（project_id）
         """
-        # 阶段1：查询向量化
         query_embedding, used_fallback = self._embed_query_with_fallback(query)
-        # 向量为空时直接返回
         if not query_embedding:
             return "embedding_unavailable", []
-        # 执行向量检索
         collection = self._get_or_create_collection()
         results = collection.query(
             query_embeddings=[query_embedding],
             n_results=top_k,
             where={"project_id": project_id},
         )
-        # 阶段2：格式统一
         formatted_results = []
         if results.get("documents") and results["documents"][0]:
             for i, doc in enumerate(results["documents"][0]):
@@ -566,17 +599,33 @@ class RAGService:
         self, project_id: str, query: str, top_k: int
     ) -> List[Dict[str, Any]]:
         """
-        关键词召回。
+        关键词召回（BM25）
 
-        目的：在 embedding 不稳定或语义向量未命中时提供可解释兜底。
+        目的：
+            在Embedding不稳定或语义向量未命中时提供可解释的兜底检索
+            关键词检索不依赖向量模型，结果可解释性强
+
+        实现步骤：
+            1. 从Chroma获取项目所有文档
+            2. 调用BM25算法进行关键词匹配
+            3. 返回排序结果
+
+        @param project_id: 项目ID
+        @param query: 用户查询
+        @param top_k: 召回数量
+        @return: BM25排序结果列表
+
+        BM25检索结果字段：
+            - content: 文档内容
+            - distance: 归一化距离
+            - metadata: 文档元数据
+            - bm25_score: BM25原始分数
+            - rank: 排名
         """
-        # 获取集合
         collection = self._get_or_create_collection()
-        # 获取项目文档
         source = self._safe_collection_get(collection, {"project_id": project_id})
         documents = source.get("documents") or []
         metadatas = source.get("metadatas") or []
-        # 类型检查
         if not isinstance(documents, list):
             documents = []
         if not isinstance(metadatas, list):
@@ -587,64 +636,106 @@ class RAGService:
         self, project_id: str, query: str, top_k: int = 5, user_id: str = ""
     ) -> Dict[str, Any]:
         """
-        混合检索总入口：关键词检索 + 向量检索去重融合。
-        状态语义：
-        - success/no_context/embedding_unavailable/vector_error
+        混合检索总入口
+
+        实现步骤：
+            1. 查询改写：使用query_rewriter将原始查询扩展为多个相关查询
+            2. 并行执行关键词检索和向量检索
+            3. 结果合并去重（RRF融合算法）：
+               - 关键词结果：基于排名加权
+               - 向量结果：基于相似度和排名加权
+            4. 精排重排：使用BGE-reranker对候选集重排
+            5. 父文档回填：将子块的父文档上下文补充到结果中
+
+        @param project_id: 项目ID
+        @param query: 用户查询
+        @param top_k: 最终返回数量（默认5）
+        @param user_id: 用户ID（用于数据隔离）
+        @return: 检索结果字典，包含：
+            - status: 检索状态
+              - success: 成功检索到结果
+              - no_context: 未检索到相关文档
+              - embedding_unavailable: 向量服务不可用
+              - vector_error: 向量检索异常
+            - data: 检索结果列表
+
+        状态语义说明：
+            - success: 检索到相关文档，可用于LLM回答
+            - no_context: 知识库中无相关文档，需LLM基于通用知识回答
+            - embedding_unavailable: 向量服务异常，仅使用关键词兜底
+            - vector_error: 整个检索流程异常
+
+        RRF融合公式：
+            score(doc) = sum(1 / (rank_k + k)) for each retrieval method k
+            其中 k = 60（常量），rank 为文档在该方法中的排名
         """
-        project_id = str(project_id)
+        project_id = str(project_id)  # 确保project_id为字符串
+
+        # 关键步骤：初始化组件
         self._init_components()
         try:
-            # 对每个查询词分别进行关键词和向量检索
+            # 关键步骤：查询改写与扩写（提升召回率）
             expanded_queries = query_rewriter.rewrite_and_expand(query)
-            keyword_hits: List[Dict[str, Any]] = []
-            vector_hits: List[Dict[str, Any]] = []
-            vector_status = "no_context"
-            # 遍历展开后的查询词
+
+            keyword_hits: List[Dict[str, Any]] = []  # 关键词检索结果
+            vector_hits: List[Dict[str, Any]] = []  # 向量检索结果
+            vector_status = "no_context"  # 向量检索状态
+
+            # 关键步骤：对每个扩展查询执行混合检索
             for current_query in expanded_queries:
-                # 关键词检索
+                # 关键步骤：BM25关键词检索
                 keyword_hits.extend(
                     self._keyword_search(project_id, current_query, top_k)
                 )
-                # 向量检索
+
+                # 关键步骤：向量语义检索
                 current_status, current_vector_hits = self._vector_search(
                     project_id, current_query, top_k
                 )
                 if current_status in {"success", "fallback"}:
                     vector_status = current_status
                 vector_hits.extend(current_vector_hits)
-            # 合并去重：关键词结果
+
+            # 关键步骤：RRF融合算法合并结果
             merged_map: Dict[str, Dict[str, Any]] = {}
+
+            # 关键步骤：关键词结果加权（基于排名）
             for rank, item in enumerate(keyword_hits):
-                key = self._build_merge_key(item)
+                key = self._build_merge_key(item)  # 构建去重key
                 base = merged_map.get(key, {"item": item, "score": 0.0})
-                base["score"] += 1.0 / (rank + 1)
+                base["score"] += 1.0 / (rank + 1)  # RRF加权公式
                 merged_map[key] = base
-            # 合并去重：向量结果（加权融合）
+
+            # 关键步骤：向量结果加权（基于相似度和排名）
             for rank, item in enumerate(vector_hits):
                 key = self._build_merge_key(item)
-                distance = float(item.get("distance") or 0.0)
-                similarity = max(0.0, 1.0 - distance)
+                distance = float(item.get("distance") or 0.0)  # 向量距离
+                similarity = max(0.0, 1.0 - distance)  # 转换为相似度
                 base = merged_map.get(key, {"item": item, "score": 0.0})
-                base["score"] += (1.0 / (rank + 1)) + similarity
+                base["score"] += (1.0 / (rank + 1)) + similarity  # RRF + 相似度加权
                 if "item" in base and isinstance(base["item"], dict):
                     base["item"]["distance"] = min(
                         float(base["item"].get("distance") or 1.0), distance
                     )
                 merged_map[key] = base
-            # 按得分排序
+
+            # 关键步骤：按分数降序排序
             ranked = sorted(
                 merged_map.values(),
                 key=lambda value: float(value.get("score") or 0),
                 reverse=True,
             )
-            # 扩展候选集
+
+            # 关键步骤：构建候选集（取top_k*3用于精排）
             merged = []
             for entry in ranked[: max(top_k * 3, top_k)]:
                 item = entry["item"]
-                item["hybrid_score"] = float(entry.get("score") or 0)
+                item["hybrid_score"] = float(entry.get("score") or 0)  # 混合得分
                 merged.append(item)
-            # 精排重排
+
+            # 关键步骤：BGE精排重排
             reranked = reranker.rerank(query, merged, top_k=top_k)
+
             app_logger.info(
                 "rag_search project={} query={} expanded={} hybrid_candidates={} final={}",
                 project_id,
@@ -653,9 +744,11 @@ class RAGService:
                 len(merged),
                 len(reranked),
             )
-            # 父文档回填
+
+            # 关键步骤：父文档上下文回填
             merged = self._apply_parent_backfill(reranked, query)
-            # 返回结果
+
+            # 关键步骤：返回结果
             if merged:
                 return {"status": "success", "data": merged}
             if vector_status == "embedding_unavailable":
@@ -668,16 +761,38 @@ class RAGService:
     def search(
         self, project_id: str, query: str, top_k: int = 5, user_id: str = ""
     ) -> List[Dict[str, Any]]:
+        """
+        简单检索入口（仅返回数据）
+
+        @param project_id: 项目ID
+        @param query: 用户查询
+        @param top_k: 召回数量
+        @param user_id: 用户ID
+        @return: 检索结果列表
+        """
         return self.search_with_status(project_id, query, top_k, user_id=user_id).get(
             "data", []
         )
 
     def delete_document(self, project_id: str, doc_id: str) -> Dict[str, Any]:
         """
-        删除文档对应向量分片。
+        删除文档对应向量分片
+
+        实现步骤：
+            1. 查询项目中文档ID对应的现有向量IDs
+            2. 执行Chroma删除操作
+            3. 返回删除状态和删除数量
+
         @param project_id: 项目ID
-        @param doc_id: 文档ID
-        @return: 删除状态与删除数量
+        @param doc_id: 文档ID（唯一标识）
+        @return: 删除结果字典，包含：
+            - status: success/error
+            - vector_deleted: 删除的向量数量
+            - error: 错误信息（如有）
+
+        使用场景：
+            - 知识库文档更新时先删除旧向量
+            - 用户删除知识库文档时同步清理向量
         """
         project_id = str(project_id)
         doc_id = str(doc_id)
@@ -697,9 +812,13 @@ class RAGService:
 
     def get_collection_stats(self, project_id: str) -> Dict[str, Any]:
         """
-        获取项目向量统计信息。
+        获取项目向量统计信息
+
         @param project_id: 项目ID
-        @return: count/project_id/collection_name
+        @return: 统计信息字典，包含：
+            - count: 向量总数
+            - project_id: 项目ID
+            - collection_name: 集合名称
         """
         project_id = str(project_id)
         try:

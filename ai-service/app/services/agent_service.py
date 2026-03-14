@@ -1,3 +1,26 @@
+"""
+Agent服务模块
+
+职责：
+    1. AI对话与用例生成统一入口
+    2. 用例需求识别与自动分流
+    3. 对接 LangChain ReAct 工具链
+    4. 融合 RAG 知识检索与平台 API
+
+核心类：
+    - AgentService: Agent核心服务（对话、用例生成）
+
+主要方法：
+    - chat(): 非流式对话入口
+    - stream_chat(): SSE流式对话入口
+    - generate_case(): 用例生成主流程
+
+实现特点：
+    - 用例需求识别：关键词匹配 "用例/测试点/测试场景" + "生成/设计/编写"
+    - 接口选择策略：ReAct Agent 优先 + 关键词打分回退
+    - 结果校验：Pydantic 模型强校验，失败自动重试
+"""
+
 from __future__ import annotations
 
 import json
@@ -32,6 +55,17 @@ from app.tools.platform_tools import get_platform_client
 
 
 def _try_parse_json_object(text: str) -> Optional[Dict[str, Any]]:
+    """
+    尝试解析 JSON 对象（含修复）
+
+    实现策略：
+        1. 直接解析原始文本
+        2. 尝试 json_repair 修复后解析
+        3. 正则提取 JSON 对象再解析
+
+    @param text: 待解析文本
+    @return: 解析后的字典，失败返回 None
+    """
     if not text:
         return None
     source = text.strip()
@@ -59,6 +93,16 @@ def _try_parse_json_object(text: str) -> Optional[Dict[str, Any]]:
 def _normalize_messages(
     messages: Optional[List[Dict[str, Any]]],
 ) -> List[Dict[str, str]]:
+    """
+    标准化对话消息格式
+
+    处理逻辑：
+        - 过滤无效消息（非字典、角色不当、内容为空）
+        - 保留 user/assistant 角色消息
+
+    @param messages: 原始消息列表
+    @return: 标准化后的消息列表
+    """
     if not isinstance(messages, list):
         return []
     result: List[Dict[str, str]] = []
@@ -73,6 +117,17 @@ def _normalize_messages(
 
 
 def _is_case_request(message: str) -> bool:
+    """
+    判断是否为用例需求消息
+
+    识别逻辑：
+        - 包含用例相关词：用例/测试点/测试场景/测试步骤/test case/case
+        - 包含动作词：生成/设计/编写/创建/输出/规划/帮我/给我
+        - 同时满足两者才判定为用例需求
+
+    @param message: 用户消息
+    @return: 是否为用例需求
+    """
     text = (message or "").lower()
     case_terms = ["用例", "测试点", "测试场景", "测试步骤", "test case", "case"]
     action_terms = ["生成", "设计", "编写", "创建", "输出", "规划", "帮我", "给我"]
@@ -82,6 +137,16 @@ def _is_case_request(message: str) -> bool:
 
 
 def _is_project_private_query(message: str) -> bool:
+    """
+    判断是否为项目私有问题
+
+    识别逻辑：
+        - 包含项目私有关键词列表
+        - 或包含 RESTful API 路径格式（/xxx/yyy）
+
+    @param message: 用户消息
+    @return: 是否为私有问题
+    """
     text = (message or "").lower()
     private_keywords = [
         "当前项目",
@@ -113,6 +178,18 @@ def _is_project_private_query(message: str) -> bool:
 
 
 class AgentService:
+    """
+    Agent服务核心类
+
+    职责：
+        - 对话与用例生成统一入口
+        - 编排 CaseGenerationWorkflow 完成用例生成
+        - 提供流式/非流式对话能力
+
+    初始化参数：
+        - case_workflow: 用例生成工作流实例
+    """
+
     def __init__(self):
         self.case_workflow = CaseGenerationWorkflow(
             get_platform_client=lambda token: get_platform_client(token),
@@ -126,6 +203,16 @@ class AgentService:
         )
 
     def _normalize_named_items(self, items: Any) -> List[Dict[str, Any]]:
+        """
+        标准化命名参数项（header/query/rest）
+
+        处理逻辑：
+            - 提取 name/value 字段
+            - 可选保留 required/type 字段
+
+        @param items: 原始参数列表
+        @return: 标准化后的参数列表
+        """
         if not isinstance(items, list):
             return []
         result: List[Dict[str, Any]] = []
@@ -145,6 +232,19 @@ class AgentService:
         return result
 
     def _normalize_body(self, body: Any) -> Dict[str, Any]:
+        """
+        标准化请求体
+
+        结构规范：
+            - type: body类型（json/form/raw/file）
+            - form: form-data参数列表
+            - json: JSON字符串
+            - raw: 原始文本
+            - file: 文件列表
+
+        @param body: 原始body
+        @return: 标准化后的body字典
+        """
         source = body if isinstance(body, dict) else {}
         body_type = str(source.get("type") or "json")
         form = self._normalize_named_items(source.get("form"))
@@ -160,6 +260,19 @@ class AgentService:
     def _normalize_relation(
         self, relation: Any, relation_map: Dict[str, List[str]], api_id: str
     ) -> List[Dict[str, str]]:
+        """
+        标准化步骤依赖关系
+
+        处理逻辑：
+            - 优先使用 relation 中的 apiId
+            - 回退到 relation_map 中的上游依赖
+            - 最多保留 2 个依赖
+
+        @param relation: 原始依赖关系
+        @param relation_map: 依赖关系映射表
+        @param api_id: 当前接口ID
+        @return: 标准化后的依赖列表
+        """
         if isinstance(relation, list):
             result: List[Dict[str, str]] = []
             for item in relation:
@@ -174,6 +287,17 @@ class AgentService:
         return [{"apiId": str(item)} for item in upstream[:2] if str(item)]
 
     def _extract_path_tokens(self, api_item: Dict[str, Any]) -> Set[str]:
+        """
+        从接口路径提取语义词
+
+        处理策略：
+            - 按 / _ - { } . 分割
+            - 过滤停用词和数字
+            - 保留有意义的语义单元
+
+        @param api_item: 接口数据
+        @return: 路径词集合
+        """
         path = str(api_item.get("path") or api_item.get("url") or "").lower()
         raw_tokens = re.split(r"[/_\-\{\}\.\s]+", path)
         stop_words = {"api", "v1", "v2", "v3", "rest", "openapi"}
@@ -189,6 +313,17 @@ class AgentService:
     def _build_dependency_relations(
         self, api_details: List[Dict[str, Any]]
     ) -> Dict[str, List[str]]:
+        """
+        构建接口依赖关系图
+
+        依赖识别策略：
+            1. 路径语义相似度匹配
+            2. 认证接口优先作为前置依赖
+            3. 注册→登录链路优先连接
+
+        @param api_details: 接口详情列表
+        @return: {api_id: [依赖api_ids]}
+        """
         if not api_details:
             return {}
         relations: Dict[str, List[str]] = {}
@@ -231,6 +366,20 @@ class AgentService:
     def _build_chat_prompt(
         self, message: str, rag_docs: List[Dict[str, Any]], rag_status: str
     ) -> str:
+        """
+        构建对话 Prompt
+
+        策略选择：
+            1. 有 RAG 上下文：融合知识片段回答
+            2. 无上下文 + 私有问题：提示未命中，提供排查建议
+            3. 无上下文 + 公开问题：直接基于通用知识回答
+            4. RAG 服务异常：提示稍后重试
+
+        @param message: 用户消息
+        @param rag_docs: RAG 检索文档
+        @param rag_status: RAG 检索状态
+        @return: 构建后的 Prompt
+        """
         docs = [item for item in (rag_docs or []) if isinstance(item, dict)]
         context = "\n\n".join(
             [str(item.get("content") or "") for item in docs if item.get("content")]
@@ -268,36 +417,63 @@ class AgentService:
         user_requirement: str,
         all_apis: List[Dict[str, Any]],
     ) -> List[str]:
+        """
+        选择候选接口ID
+
+        实现策略：
+            1. ReAct Agent优先选择（调用LLM结构化输出）
+            2. 失败时回退关键词打分策略
+            3. 流程类需求强制至少3个接口
+            4. 无匹配时返回前3个接口作为兜底
+
+        @param project_id: 项目ID
+        @param token: 鉴权token
+        @param user_requirement: 用户需求描述
+        @param all_apis: 可用接口列表
+        @return: 选中的接口ID列表（最多5个）
+        """
         if not all_apis:
             return []
+
+        # 关键步骤：提取用户需求关键词
         query = user_requirement.lower()
+
+        # 关键步骤：定义语义分组（用于关键词匹配加分）
         semantic_groups = {
             "login": ["登录", "signin", "login", "auth", "token", "oauth", "session"],
             "register": ["注册", "signup", "register", "create user", "user/create"],
             "user": ["用户", "user", "account", "账号", "个人信息"],
             "flow": ["流程", "链路", "闭环", "完整", "前后", "先后", "场景"],
         }
+
+        # 关键步骤：匹配用户需求所属的语义分组
         matched_groups = [
             group
             for group, cues in semantic_groups.items()
             if any(cue.lower() in query for cue in cues)
         ]
+
+        # 关键步骤：构建接口池摘要（用于LLM选择）
         api_pool = [
             {
-                "id": str(item.get("id") or ""),
-                "name": str(item.get("name") or ""),
-                "path": str(item.get("path") or item.get("url") or ""),
-                "method": str(item.get("method") or ""),
-                "description": str(item.get("description") or ""),
+                "id": str(item.get("id") or ""),  # 接口ID
+                "name": str(item.get("name") or ""),  # 接口名称
+                "path": str(item.get("path") or item.get("url") or ""),  # 接口路径
+                "method": str(item.get("method") or ""),  # HTTP方法
+                "description": str(item.get("description") or ""),  # 接口描述
             }
             for item in all_apis
             if isinstance(item, dict) and item.get("id")
         ]
-        id_set = {item["id"] for item in api_pool}
+        id_set = {item["id"] for item in api_pool}  # 有效ID集合
+
+        # 关键步骤：尝试LLM结构化选择
         try:
             llm = llm_service.get_chat_model()
             if llm is None:
                 raise RuntimeError("llm_not_configured")
+
+            # 关键步骤：构建接口选择Prompt
             selector_prompt = ChatPromptTemplate.from_messages(
                 [
                     ("system", API_SELECTOR_SYSTEM_PROMPT),
@@ -308,6 +484,8 @@ class AgentService:
                     ),
                 ]
             )
+
+            # 关键步骤：调用LLM结构化输出
             chain = selector_prompt | llm.with_structured_output(ApiSelectionResult)
             result = chain.invoke(
                 {
@@ -317,6 +495,8 @@ class AgentService:
                 }
             )
             ids = [str(item) for item in result.api_ids if str(item) in id_set]
+
+            # 关键步骤：流程类需求补全接口
             if ids:
                 if "flow" in matched_groups and len(ids) < 2:
                     available = [
@@ -330,11 +510,13 @@ class AgentService:
                             continue
                         ids.append(candidate)
                         seen.add(candidate)
-                        if len(ids) >= 3:
+                        if len(ids) >= 3:  # 流程类至少3个接口
                             break
                 return ids[:5]
         except Exception:
             pass
+
+        # 关键步骤：回退到关键词打分策略
         ranked: List[Dict[str, Any]] = []
         for item in all_apis:
             if not isinstance(item, dict):
@@ -347,14 +529,20 @@ class AgentService:
             description = str(item.get("description") or "").lower()
             score = 0
             corpus = f"{name} {path} {description}"
+
+            # 关键步骤：关键词匹配得分
             for token_item in re.split(r"[\s,，。;；]+", query):
                 token_item = token_item.strip()
                 if token_item and token_item in corpus:
                     score += 1
+
+            # 关键步骤：语义分组加分
             for group in matched_groups:
                 cues = semantic_groups.get(group, [])
                 if any(cue.lower() in corpus for cue in cues):
                     score += 3
+
+            # 关键步骤：流程类需求特殊处理
             if "flow" in matched_groups and any(
                 tag in matched_groups for tag in ["login", "register", "user"]
             ):
@@ -363,12 +551,16 @@ class AgentService:
                     for cue in semantic_groups.get("login", [])
                     + semantic_groups.get("register", [])
                 ):
-                    score += 2
+                    score += 2  # 流程类需求优先选择登录/注册接口
             ranked.append({"id": current_id, "score": score})
+
+        # 关键步骤：按分数排序并返回Top-K
         ranked.sort(key=lambda x: x.get("score", 0), reverse=True)
         top = [item["id"] for item in ranked if item.get("score", 0) > 0][:5]
         if top:
             return top
+
+        # 关键步骤：兜底返回前3个接口
         fallback = [
             str(item.get("id"))
             for item in all_apis
@@ -386,6 +578,28 @@ class AgentService:
         schema_payload: Dict[str, Any],
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
+        """
+        构建用例生成 Prompt
+
+        Prompt组成：
+            1. 系统指令：角色定义 + 约束规则
+            2. 项目ID：确保数据隔离
+            3. 用户需求：原始描述
+            4. 历史对话：上下文信息
+            5. 接口列表：可用接口池
+            6. 依赖关系：接口调用链路
+            7. 知识片段：RAG检索结果
+            8. Schema参考：后端数据结构
+
+        @param project_id: 项目ID
+        @param user_requirement: 用户需求
+        @param api_details: 接口详情列表
+        @param api_relations: 依赖关系图
+        @param rag_docs: RAG文档
+        @param schema_payload: Case Schema
+        @param messages: 历史消息
+        @return: 构建后的Prompt
+        """
         history_text = "\n".join(
             [
                 f"{item.get('role')}: {item.get('content')}"
@@ -435,7 +649,7 @@ class AgentService:
             '    {"index": 2, "id": "", "caseId": "", "apiId": "真实接口ID", "description": "异常场景", "header": [], "body": {"type":"json","form":[],"json":"{\\"account\\":\\"\\"}","raw":"","file":[]}, "query": [], "rest": [], "assertion": [], "relation": [], "controller": [], "apiMethod": "GET", "apiName": "接口名", "apiPath": "/path"}\n'
             "  ]\n"
             "}\n\n"
-            "你必须输出合法 JSON 对象，以便 response_format={\"type\":\"json_object\"} 直接解析。\n"
+            '你必须输出合法 JSON 对象，以便 response_format={"type":"json_object"} 直接解析。\n'
             "直接输出JSON对象，不要任何解释或Markdown标记。\n"
             "不需要包含后端自动生成字段（如createTime、updateTime、createUser）。\n"
         )
@@ -447,26 +661,49 @@ class AgentService:
         api_details: List[Dict[str, Any]],
         api_relations: Optional[Dict[str, List[str]]] = None,
     ) -> Dict[str, Any]:
+        """
+        标准化用例对象
+
+        处理步骤：
+            1. 填充必填字段（projectId/type/status）
+            2. 校验并过滤无效步骤
+            3. 补充接口元信息
+            4. 确保至少2个步骤（流程补全）
+            5. 重排步骤序号
+
+        @param project_id: 项目ID
+        @param case_obj: LLM生成的用例对象
+        @param api_details: 接口详情列表
+        @param api_relations: 依赖关系图
+        @return: 标准化后的用例字典
+        """
+        # 关键步骤：提取首个接口信息作为默认值
         first_api = api_details[0] if api_details else {}
+
+        # 关键步骤：构建有效接口ID集合（用于校验）
         valid_api_ids = {
             str(item.get("id"))
             for item in api_details
             if isinstance(item, dict) and item.get("id")
         }
         relation_map = api_relations or {}
-        module_id = str(first_api.get("moduleId") or "0")
-        module_name = str(first_api.get("moduleName") or "默认模块")
-        now_name = f"AI生成用例-{datetime.now().strftime('%m%d%H%M%S')}"
+        module_id = str(first_api.get("moduleId") or "0")  # 默认模块ID
+        module_name = str(first_api.get("moduleName") or "默认模块")  # 默认模块名
+        now_name = f"AI生成用例-{datetime.now().strftime('%m%d%H%M%S')}"  # 默认用例名
+
+        # 关键步骤：初始化标准化用例对象
         normalized = dict(case_obj or {})
-        normalized["id"] = str(normalized.get("id") or "")
-        normalized["num"] = int(normalized.get("num") or 0)
-        normalized["name"] = str(normalized.get("name") or now_name)
-        normalized["level"] = str(normalized.get("level") or "P0")
-        normalized["moduleId"] = str(normalized.get("moduleId") or module_id)
-        normalized["moduleName"] = str(normalized.get("moduleName") or module_name)
-        normalized["projectId"] = str(project_id)
-        normalized["type"] = "API"
-        normalized["thirdParty"] = str(normalized.get("thirdParty") or "")
+        normalized["id"] = str(normalized.get("id") or "")  # 用例ID（新增时为空）
+        normalized["num"] = int(normalized.get("num") or 0)  # 用例编号
+        normalized["name"] = str(normalized.get("name") or now_name)  # 用例名称
+        normalized["level"] = str(normalized.get("level") or "P0")  # 优先级
+        normalized["moduleId"] = str(normalized.get("moduleId") or module_id)  # 模块ID
+        normalized["moduleName"] = str(
+            normalized.get("moduleName") or module_name
+        )  # 模块名
+        normalized["projectId"] = str(project_id)  # 项目ID（数据隔离）
+        normalized["type"] = "API"  # 用例类型固定为API
+        normalized["thirdParty"] = str(normalized.get("thirdParty") or "")  # 第三方标识
         normalized["description"] = str(
             normalized.get("description") or "AI自动生成用例"
         )
@@ -474,90 +711,104 @@ class AgentService:
             normalized.get("environmentIds")
             if isinstance(normalized.get("environmentIds"), list)
             else []
-        )
-        normalized["system"] = str(normalized.get("system") or "web")
+        )  # 环境ID列表
+        normalized["system"] = str(normalized.get("system") or "web")  # 系统类型
         normalized["commonParam"] = (
             normalized.get("commonParam")
             if isinstance(normalized.get("commonParam"), dict)
             else {}
-        )
+        )  # 公共参数
         normalized["commonParam"] = {
             "functions": (
                 normalized["commonParam"].get("functions")
                 if isinstance(normalized["commonParam"].get("functions"), list)
                 else []
-            ),
+            ),  # 前置函数
             "params": (
                 normalized["commonParam"].get("params")
                 if isinstance(normalized["commonParam"].get("params"), list)
                 else []
-            ),
-            "header": str(normalized["commonParam"].get("header") or ""),
-            "proxy": str(normalized["commonParam"].get("proxy") or ""),
+            ),  # 公共参数
+            "header": str(normalized["commonParam"].get("header") or ""),  # 公共请求头
+            "proxy": str(normalized["commonParam"].get("proxy") or ""),  # 代理配置
         }
-        normalized["status"] = str(normalized.get("status") or "正常")
+        normalized["status"] = str(normalized.get("status") or "正常")  # 用例状态
 
+        # 关键步骤：提取并校验步骤列表
         steps = (
             normalized.get("caseApis")
             if isinstance(normalized.get("caseApis"), list)
             else []
         )
         normalized_steps: List[Dict[str, Any]] = []
+
+        # 关键步骤：遍历并标准化每个步骤
         for index, step in enumerate(steps):
             if not isinstance(step, dict):
                 continue
             api_id = str(step.get("apiId") or "")
+
+            # 关键步骤：尝试从接口列表中获取apiId
             if not api_id and api_details:
                 api_id = str(
                     api_details[min(index, len(api_details) - 1)].get("id") or ""
                 )
+
+            # 关键步骤：校验apiId是否有效
             if not api_id or api_id not in valid_api_ids:
                 continue
+
+            # 关键步骤：获取接口元信息
             api_meta = next(
                 (item for item in api_details if str(item.get("id")) == api_id), {}
             )
             relation = self._normalize_relation(
                 step.get("relation"), relation_map, api_id
             )
+
+            # 关键步骤：构建标准化步骤对象
             normalized_steps.append(
                 {
-                    "id": str(step.get("id") or ""),
+                    "id": str(step.get("id") or ""),  # 步骤ID（新增时为空）
                     "index": int(
                         step.get("index")
                         if isinstance(step.get("index"), int)
                         else index + 1
-                    ),
-                    "caseId": str(step.get("caseId") or ""),
-                    "apiId": api_id,
-                    "description": str(step.get("description") or ""),
-                    "header": self._normalize_named_items(step.get("header")),
-                    "body": self._normalize_body(step.get("body")),
-                    "query": self._normalize_named_items(step.get("query")),
-                    "rest": self._normalize_named_items(step.get("rest")),
+                    ),  # 步骤序号
+                    "caseId": str(step.get("caseId") or ""),  # 用例ID
+                    "apiId": api_id,  # 接口ID
+                    "description": str(step.get("description") or ""),  # 步骤描述
+                    "header": self._normalize_named_items(step.get("header")),  # 请求头
+                    "body": self._normalize_body(step.get("body")),  # 请求体
+                    "query": self._normalize_named_items(step.get("query")),  # 查询参数
+                    "rest": self._normalize_named_items(step.get("rest")),  # REST参数
                     "assertion": (
                         step.get("assertion")
                         if isinstance(step.get("assertion"), list)
                         else []
-                    ),
-                    "relation": relation,
+                    ),  # 断言列表
+                    "relation": relation,  # 依赖关系
                     "controller": (
                         step.get("controller")
                         if isinstance(step.get("controller"), list)
                         else []
-                    ),
+                    ),  # 控制器
                     "apiMethod": str(
                         step.get("apiMethod") or api_meta.get("method") or ""
-                    ),
-                    "apiName": str(step.get("apiName") or api_meta.get("name") or ""),
+                    ),  # HTTP方法
+                    "apiName": str(
+                        step.get("apiName") or api_meta.get("name") or ""
+                    ),  # 接口名
                     "apiPath": str(
                         step.get("apiPath")
                         or api_meta.get("path")
                         or api_meta.get("url")
                         or ""
-                    ),
+                    ),  # 接口路径
                 }
             )
 
+        # 关键步骤：确保至少2个步骤（流程补全）
         if len(normalized_steps) < 2 and api_details:
             used_ids = {str(item.get("apiId") or "") for item in normalized_steps}
             for api_meta in api_details:
@@ -644,6 +895,23 @@ class AgentService:
         messages: Optional[List[Dict[str, Any]]] = None,
         user_id: str = "",
     ):
+        """
+        用例生成主入口
+
+        实现步骤：
+            1. 记录日志（开始/结束）
+            2. 构建工作流上下文
+            3. 调用 CaseGenerationWorkflow 执行
+            4. 包装错误信息并返回
+
+        @param project_id: 项目ID
+        @param token: 鉴权token
+        @param user_requirement: 用户需求描述
+        @param selected_apis: 预选接口ID列表
+        @param messages: 历史对话消息
+        @param user_id: 用户ID
+        @return: {status, case, existing_api_ids, message}
+        """
         app_logger.info(
             "case_workflow_start project_id={} user_id={} requirement={}",
             project_id,
@@ -678,6 +946,22 @@ class AgentService:
         messages: Optional[List[Dict[str, Any]]] = None,
         user_id: str = "",
     ) -> Dict[str, Any]:
+        """
+        非流式对话入口
+
+        实现步骤：
+            1. 识别用例需求
+            2. 是用例需求 → 调用 generate_case
+            3. 是问答 → RAG检索 + LLM回答
+
+        @param project_id: 项目ID
+        @param token: 鉴权token
+        @param message: 用户消息
+        @param use_rag: 是否启用RAG
+        @param messages: 历史消息
+        @param user_id: 用户ID
+        @return: {reply, case?}
+        """
         msg = (message or "").strip()
         if not msg:
             return {"reply": "请先输入问题"}
@@ -719,6 +1003,23 @@ class AgentService:
         messages: Optional[List[Dict[str, Any]]] = None,
         user_id: str = "",
     ):
+        """
+        SSE流式对话入口
+
+        实现步骤：
+            1. 判断是否用例需求
+            2. 用例需求：线程池执行 + 事件推送 case 事件
+            3. 问答需求：RAG检索 + 流式推送 content 事件
+            4. 立即推送首事件避免等待阻塞
+
+        @param project_id: 项目ID
+        @param token: 鉴权token
+        @param message: 用户消息
+        @param use_rag: 是否启用RAG
+        @param messages: 历史消息
+        @param user_id: 用户ID
+        @return: SSE事件生成器
+        """
         msg = (message or "").strip()
         if not msg:
             yield {"type": "content", "delta": "请先输入问题"}
@@ -808,6 +1109,15 @@ class AgentService:
     def get_api_list_for_selection(
         self, project_id: str, token: str
     ) -> List[Dict[str, Any]]:
+        """
+        获取接口列表供前端选择
+
+        用于"手动选接口 + Agent生成"协同场景
+
+        @param project_id: 项目ID
+        @param token: 鉴权token
+        @return: 接口列表
+        """
         return get_platform_client(token).get_api_list(project_id)
 
 

@@ -1,6 +1,20 @@
 """
-文档分块工具
-支持多种分块策略
+文档分块工具模块
+
+职责：
+    1. 提供多种文本分块策略（标题分块、段落分块、句子分块、固定大小分块）
+    2. 支持 Markdown 文档语义感知分块
+    3. 为 RAG 系统提供合适大小的文本片段
+
+核心类：
+    - TextChunker: 文本分块器
+
+主要方法：
+    - chunk_markdown_by_heading(): 按Markdown标题切片
+    - chunk_by_paragraph(): 按段落分块
+    - chunk_by_sentence(): 按句子分块
+    - chunk_fixed(): 固定大小分块
+    - chunk_text(): 智能分块入口（自动选择最佳策略）
 """
 
 from typing import List
@@ -10,16 +24,37 @@ import re
 class TextChunker:
     """
     文本分块器。
-    职责：将长文按标题/段落/句子切分为适合RAG索引的片段。
+
+    职责：
+        - 将长文本按标题/段落/句子切分为适合RAG索引的片段
+        - 优先保持语义完整性
+        - 支持重叠区域以保持上下文连贯性
+
+    分块策略优先级：
+        1. 标题分块（保持语义完整）
+        2. 段落分块（自然断点）
+        3. 句子分块（细粒度）
+        4. 固定分块（兜底策略）
     """
 
     @staticmethod
     def chunk_markdown_by_heading(text: str, chunk_size: int = 1200) -> List[str]:
         """
-        按 Markdown 标题优先切片。
-        @param text: 原始文档
-        @param chunk_size: 单片最大字符数
-        @return: 切片结果
+        按 Markdown 标题优先切片
+
+        实现步骤：
+            1. 按行分割文本
+            2. 识别 Markdown 标题（# ~ ######）
+            3. 遇到新标题时，将之前内容作为一个分段
+            4. 对每个分段，如果超过 chunk_size，进一步按段落分割
+
+        @param text: 原始Markdown文档
+        @param chunk_size: 单片最大字符数（默认1200）
+        @return: 分块后的文本列表
+
+        示例：
+            输入：# 标题1\n内容1\n\n# 标题2\n内容2
+            输出：["# 标题1\n内容1", "# 标题2\n内容2"]
         """
         if not text:
             return []
@@ -66,13 +101,21 @@ class TextChunker:
         """
         按段落分块
 
-        Args:
-            text: 原始文本
-            chunk_size: 块大小（字符数）
-            overlap: 重叠字符数
+        实现步骤：
+            1. 按双换行符分割段落
+            2. 遍历段落，累加到当前块
+            3. 当前块超过 chunk_size 时，保存当前块并开启新块
+            4. 新块包含 overlap 长度的前一块内容（保持上下文连贯）
 
-        Returns:
-            分块后的文本列表
+        @param text: 原始文本
+        @param chunk_size: 块大小（字符数），默认500
+        @param overlap: 重叠字符数，默认50（保持上下文连贯性）
+        @return: 分块后的文本列表
+
+        示例：
+            text = "段落1内容...\n\n段落2内容...\n\n段落3内容..."
+            chunk_size = 20, overlap = 5
+            输出：["段落1内容...段落2", "段落2内容...段落3", "段落3内容..."]
         """
         if not text:
             return []
@@ -88,7 +131,6 @@ class TextChunker:
             if not para:
                 continue
 
-            # 如果当前块加上新段落超过大小，先保存当前块
             if len(current_chunk) + len(para) > chunk_size and current_chunk:
                 chunks.append(current_chunk.strip())
                 # 保留overlap长度的内容
@@ -111,19 +153,19 @@ class TextChunker:
         """
         按句子分块
 
-        Args:
-            text: 原始文本
-            chunk_size: 块大小（字符数）
-            overlap: 重叠句子数
+        实现步骤：
+            1. 按标点符号（。！？.!?）分割句子
+            2. 重新组合句子和标点符号
+            3. 累加句子到当前块，超过 chunk_size 时分割
+            4. 新块包含 overlap 长度的前一块内容
 
-        Returns:
-            分块后的文本列表
+        @param text: 原始文本
+        @param chunk_size: 块大小（字符数），默认300
+        @param overlap: 重叠字符数，默认20
+        @return: 分块后的文本列表
         """
         if not text:
             return []
-
-        # 简单按句号、问号、感叹号分割
-        import re
 
         sentences = re.split(r"([。！？.!?])", text)
 
@@ -157,13 +199,19 @@ class TextChunker:
         """
         固定大小分块
 
-        Args:
-            text: 原始文本
-            chunk_size: 块大小
-            overlap: 重叠大小
+        实现步骤：
+            1. 从文本开头开始，每次取 chunk_size 大小的片段
+            2. 下一个片段起点 = 上一个片段终点 - overlap
+            3. 重复直到文本结束
 
-        Returns:
-            分块后的文本列表
+        @param text: 原始文本
+        @param chunk_size: 块大小（字符数），默认500
+        @param overlap: 重叠字符数，默认50
+        @return: 分块后的文本列表
+
+        示例：
+            text = "abcdefghij", chunk_size = 3, overlap = 1
+            输出：["abc", "cde", "efg", "ghi", "ij"]
         """
         if not text:
             return []
@@ -182,34 +230,27 @@ class TextChunker:
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
     """
-    文本分块主函数
-    
+    文本分块主函数（智能策略选择）
+
     实现策略：
         1. 优先使用标题分块（保持语义完整）
         2. 无标题时回退段落分块
-    
-    Args:
-        text: 原始文本
-        chunk_size: 块大小
-        overlap: 重叠大小
 
-    Returns:
-        分块后的文本列表
+    @param text: 原始文本
+    @param chunk_size: 块大小（默认500）
+    @param overlap: 重叠大小（默认50）
+    @return: 分块后的文本列表
     """
-    chunks = TextChunker.chunk_markdown_by_heading(
-        text, max(chunk_size, 800)
-    )
+    chunks = TextChunker.chunk_markdown_by_heading(text, max(chunk_size, 800))
     if chunks:
         return chunks
-    return TextChunker.chunk_by_paragraph(
-        text, chunk_size, overlap
-    )
+    return TextChunker.chunk_by_paragraph(text, chunk_size, overlap)
 
 
 if __name__ == "__main__":
     """
     文本分块工具调试代码
-    
+
     调试说明：
         1. 测试按标题分块
         2. 测试按段落分块
@@ -219,7 +260,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("文本分块工具调试")
     print("=" * 60)
-    
+
     test_text = """# 登录接口文档
 
 ## 接口说明
@@ -239,34 +280,34 @@ if __name__ == "__main__":
 2. 密码需要加密传输
 3. 登录失败返回错误码401
 """
-    
+
     # 测试1：按标题分块
     print("\n1. 按标题分块测试:")
     chunks = TextChunker.chunk_markdown_by_heading(test_text, chunk_size=500)
     print(f"   分块数量: {len(chunks)}")
     for i, chunk in enumerate(chunks):
         print(f"   - 块{i+1}: {chunk[:50]}...")
-    
+
     # 测试2：按段落分块
     print("\n2. 按段落分块测试:")
     chunks = TextChunker.chunk_by_paragraph(test_text, chunk_size=200)
     print(f"   分块数量: {len(chunks)}")
-    
+
     # 测试3：按句子分块
     print("\n3. 按句子分块测试:")
     chunks = TextChunker.chunk_by_sentence(test_text, chunk_size=100)
     print(f"   分块数量: {len(chunks)}")
-    
+
     # 测试4：固定大小分块
     print("\n4. 固定大小分块测试:")
     chunks = TextChunker.chunk_fixed(test_text, chunk_size=100)
     print(f"   分块数量: {len(chunks)}")
-    
+
     # 测试5：主函数
     print("\n5. 主函数测试:")
     chunks = chunk_text(test_text)
     print(f"   分块数量: {len(chunks)}")
-    
+
     print("\n" + "=" * 60)
     print("调试完成")
     print("=" * 60)

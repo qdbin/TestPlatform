@@ -1,14 +1,17 @@
 """
 BM25关键词检索模块
 
-核心功能：
-    - 经典BM25算法实现
-    - 支持中英文混合分词
-    - 输出排序结果与分数
+职责：
+    1. 实现经典BM25相关性评分算法
+    2. 支持中英文混合分词（包含二元组生成）
+    3. 提供高效的关键词检索能力
 
-BM25参数：
-    - k1: 词频饱和参数，默认1.5
-    - b: 文档长度归一化参数，默认0.75
+核心功能：
+    - 经典BM25算法：考虑词频（TF）和文档频率（DF）的影响
+    - 中英文混合分词：支持英文单词和中文汉字的混合处理
+    - BM25参数：
+        - k1: 词频饱和参数（默认1.5），控制词频影响的增长速度
+        - b: 文档长度归一化参数（默认0.75），控制文档长度归一化程度
 """
 
 from __future__ import annotations
@@ -26,9 +29,25 @@ class BM25KeywordRetriever:
         - 实现经典BM25相关性评分算法
         - 支持中英文混合文本分词
         - 返回按相关性排序的检索结果
+
+    BM25算法公式：
+        Score(Q, D) = sum(IDF(qi) * (f(qi, D) * (k1 + 1)) / (f(qi, D) + k1 * (1 - b + b * |D| / avgdl)))
+
+        其中：
+        - IDF(qi): 逆文档频率，衡量词的重要程度
+        - f(qi, D): 词qi在文档D中的词频
+        - |D|: 文档D的长度
+        - avgdl: 平均文档长度
+        - k1, b: 调节参数
     """
 
     def __init__(self, k1: float = 1.5, b: float = 0.75):
+        """
+        初始化BM25检索器
+
+        @param k1: 词频饱和参数，默认1.5，值越大对词频越敏感
+        @param b: 文档长度归一化参数，默认0.75，值越大文档长度影响越大
+        """
         self.k1 = k1
         self.b = b
 
@@ -37,12 +56,16 @@ class BM25KeywordRetriever:
         中英文混合分词
 
         处理策略：
-            1. 转小写
-            2. 英文按字母数字分割
-            3. 中文按字符分割，并生成二元组
+            1. 转小写统一处理
+            2. 英文按字母数字连续字符分割
+            3. 中文按字符分割，并生成二元组（bigram）增强检索效果
 
         @param text: 待分词文本
         @return: token列表
+
+        示例：
+            输入："登录接口API user login"
+            输出：["登录", "登", "录", "录入", "接口", "接", "口", "口a", "api", "user", "login", ...]
         """
         lowered = str(text or "").lower()
         base_tokens = [
@@ -71,25 +94,37 @@ class BM25KeywordRetriever:
 
         实现步骤：
             1. 对查询和文档集分词
-            2. 计算IDF和文档长度
-            3. 对每个文档计算BM25分数
-            4. 排序并返回Top-K结果
+            2. 计算IDF（逆文档频率）和平均文档长度
+            3. 对每个文档计算BM25分数：
+               - 统计每个查询词在文档中的词频
+               - 应用BM25公式计算分数
+            4. 按分数降序排序，返回Top-K结果
 
         @param query: 用户查询
-        @param documents: 文档列表
-        @param metadatas: 文档元数据列表
+        @param documents: 文档列表（待检索的文档内容）
+        @param metadatas: 文档元数据列表（与documents一一对应）
         @param top_k: 召回数量
-        @return: [{"content": "...", "distance": 0.5, "metadata": {...}, "bm25_score": 1.5}, ...]
+        @return: 检索结果列表，每项包含：
+            - content: 文档内容
+            - distance: 归一化距离（1 - score/max_score）
+            - metadata: 文档元数据
+            - bm25_score: 原始BM25分数
+            - rank: 排名（1-based）
+
+        示例：
+            query = "登录接口"
+            documents = ["用户登录接口说明", "注册接口文档", "登录API接口文档"]
+            返回：[
+                {"content": "登录API接口文档", "bm25_score": 2.5, "rank": 1, ...},
+                {"content": "用户登录接口说明", "bm25_score": 1.8, "rank": 2, ...}
+            ]
         """
-        # 边界检查
         if not documents:
             return []
-        # 步骤1：对查询和文档集分词
         corpus_tokens = [self._tokenize(doc) for doc in documents]
         query_tokens = self._tokenize(query)
         if not query_tokens:
             return []
-        # 步骤2：计算IDF和文档长度
         avg_doc_len = sum(len(tokens) for tokens in corpus_tokens) / max(
             1, len(corpus_tokens)
         )
@@ -99,7 +134,6 @@ class BM25KeywordRetriever:
                 doc_freq[token] = doc_freq.get(token, 0) + 1
         total_docs = len(corpus_tokens)
 
-        # 步骤3：对每个文档计算BM25分数
         scores: List[tuple[int, float]] = []
         for idx, tokens in enumerate(corpus_tokens):
             tf_map: Dict[str, int] = {}
@@ -107,7 +141,6 @@ class BM25KeywordRetriever:
                 tf_map[token] = tf_map.get(token, 0) + 1
             doc_len = len(tokens)
             score = 0.0
-            # 计算每个查询词的BM25分数
             for token in query_tokens:
                 if token not in tf_map:
                     continue
@@ -120,7 +153,6 @@ class BM25KeywordRetriever:
                 score += idf * ((tf * (self.k1 + 1)) / max(1e-8, denominator))
             if score > 0:
                 scores.append((idx, score))
-        # 步骤4：排序并返回Top-K
         scores.sort(key=lambda item: item[1], reverse=True)
         output: List[Dict[str, Any]] = []
         for rank, (idx, score) in enumerate(scores[:top_k]):

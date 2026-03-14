@@ -1,3 +1,20 @@
+"""
+RAG检索评估脚本
+
+职责：
+    - 加载RAG测试数据集
+    - 调用知识库检索API
+    - 评估检索结果（召回率、精确率、MRR）
+    - 输出评估指标
+
+评估指标：
+    - retrieval_recall: 召回率
+    - retrieval_precision: 精确率
+    - retrieval_mrr: 平均倒数排名
+    - answer_relevance: 答案相关性
+    - faithfulness: 答案可信度
+"""
+
 from __future__ import annotations
 
 import json
@@ -20,6 +37,21 @@ API_BASE = "http://localhost:8001"
 
 
 def load_dataset() -> List[Dict[str, Any]]:
+    """
+    加载RAG评估数据集
+
+    数据格式（JSONL，每行一个JSON对象）：
+        {
+            "id": "p1-doc-001",           // 测试用例唯一标识
+            "project_id": "p1",           // 项目ID（用于匹配向量库）
+            "question": "登录接口需要哪些参数？",  // 用户问题
+            "doc_ids": ["doc1", "doc2"],  // 标准相关文档ID列表
+            "golden_keywords": ["登录", "参数", "username", "password"],  // 答案应包含的关键词
+            "reference_answer": "..."     // 参考答案（用于答案准确性评估）
+        }
+
+    @return: 测试数据列表
+    """
     rows: List[Dict[str, Any]] = []
     with DATASET.open("r", encoding="utf-8") as f:
         for line in f:
@@ -31,6 +63,34 @@ def load_dataset() -> List[Dict[str, Any]]:
 
 
 def run_single(item: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    执行单条RAG评估
+
+    评估流程：
+        1. 构建检索请求payload，包含project_id、question、top_k等参数
+        2. 调用RAG查询API `/ai/rag/query`
+        3. 解析响应，提取检索到的文档列表和生成答案
+        4. 从文档metadata中提取predicted_doc_ids
+        5. 使用keyword_match_score计算答案相关性
+
+    @param item: 测试数据项（包含 id, question, doc_ids, golden_keywords, reference_answer）
+    @return: 评估结果字典，包含字段：
+        - id: 测试用例ID
+        - predicted_doc_ids: 检索到的文档ID列表
+        - golden_doc_ids: 标准相关文档ID列表
+        - answer_relevance: 关键词匹配得分（0~1）
+        - faithfulness: 答案可信度（同 answer_relevance）
+        - answer_accuracy: 答案准确性得分
+
+    API响应示例：
+        {
+            "data": [
+                {"content": "...", "metadata": {"doc_id": "doc1", ...}},
+                {"content": "...", "metadata": {"doc_id": "doc2", ...}}
+            ],
+            "answer": "登录接口需要username和password参数..."
+        }
+    """
     payload = {
         "project_id": (
             item["id"].split("-")[0]
@@ -66,6 +126,16 @@ def run_single(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def main() -> None:
+    """
+    RAG评估主入口
+
+    执行流程：
+        1. 加载数据集
+        2. 执行每条检索评估
+        3. 计算检索指标（召回/精确/MRR）
+        4. 计算答案质量指标
+        5. 输出JSON结果
+    """
     client = Client()
     rows = load_dataset()
     records = [run_single(item) for item in rows]

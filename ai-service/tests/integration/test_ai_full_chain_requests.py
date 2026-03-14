@@ -1,3 +1,23 @@
+"""
+AI服务全链路集成测试
+
+测试范围：
+    1. RAG端点：文档添加、检索、统计、删除
+    2. Agent端点：接口列表获取、用例生成
+    3. 后端AI端点：知识库管理、用例生成、流式对话
+
+环境变量：
+    - AI_BASE_URL: AI服务地址（默认http://localhost:8001）
+    - BACKEND_BASE_URL: Java后端地址（默认http://localhost:8080）
+    - EVAL_ACCOUNT: 测试账号
+    - EVAL_PASSWORD: 测试密码
+
+关键测试场景：
+    - test_ai_service_rag_endpoints: RAG全流程测试
+    - test_ai_service_agent_endpoints: Agent用例生成测试
+    - test_backend_ai_endpoints: 后端AI集成测试
+"""
+
 import base64
 import os
 import uuid
@@ -6,14 +26,17 @@ from typing import Any, Dict, Iterable, List
 import pytest
 import requests
 
-
-AI_BASE_URL = os.getenv("AI_BASE_URL", "http://localhost:8001")
-BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://localhost:8080")
-EVAL_ACCOUNT = os.getenv("EVAL_ACCOUNT", "LMadmin")
-EVAL_PASSWORD = os.getenv("EVAL_PASSWORD", "Liuma@123456")
+# 关键配置：服务地址
+AI_BASE_URL = os.getenv("AI_BASE_URL", "http://localhost:8001")  # AI服务地址
+BACKEND_BASE_URL = os.getenv(
+    "BACKEND_BASE_URL", "http://localhost:8080"
+)  # Java后端地址
+EVAL_ACCOUNT = os.getenv("EVAL_ACCOUNT", "LMadmin")  # 测试账号
+EVAL_PASSWORD = os.getenv("EVAL_PASSWORD", "Liuma@123456")  # 测试密码
 
 
 def _ai_ready() -> bool:
+    """检查AI服务是否就绪"""
     try:
         resp = requests.get(f"{AI_BASE_URL}/health", timeout=3)
         return resp.ok
@@ -22,7 +45,9 @@ def _ai_ready() -> bool:
 
 
 def _backend_ready() -> bool:
+    """检查后端服务是否就绪"""
     try:
+        # 关键步骤：密码Base64编码
         encoded = base64.b64encode(EVAL_PASSWORD.encode("utf-8")).decode("utf-8")
         resp = requests.post(
             f"{BACKEND_BASE_URL}/autotest/login",
@@ -35,6 +60,7 @@ def _backend_ready() -> bool:
 
 
 def _unwrap_backend_data(payload: Dict[str, Any]) -> Any:
+    """解包后端响应数据"""
     if not isinstance(payload, dict):
         return None
     if "data" in payload:
@@ -43,6 +69,7 @@ def _unwrap_backend_data(payload: Dict[str, Any]) -> Any:
 
 
 def _extract_list(data: Any) -> List[Dict[str, Any]]:
+    """从响应中提取列表数据"""
     if isinstance(data, list):
         return [x for x in data if isinstance(x, dict)]
     if isinstance(data, dict):
@@ -54,11 +81,14 @@ def _extract_list(data: Any) -> List[Dict[str, Any]]:
 
 
 def _iter_sse_events(resp: requests.Response) -> Iterable[Dict[str, Any]]:
+    """迭代解析SSE事件流"""
     for raw in resp.iter_lines(decode_unicode=True):
         if not raw:
             continue
         if not str(raw).startswith("data:"):
             continue
+
+        # 关键步骤：提取data后的JSON内容
         chunk = str(raw)[5:].strip()
         if not chunk:
             continue
@@ -72,8 +102,18 @@ def _iter_sse_events(resp: requests.Response) -> Iterable[Dict[str, Any]]:
 
 @pytest.fixture(scope="session")
 def runtime_context() -> Dict[str, str]:
+    """
+    会话级Fixture：准备运行时上下文
+
+    返回：
+        - token: 鉴权令牌
+        - project_id: 有接口的项目ID
+    """
+    # 关键步骤：检查服务就绪状态
     if not _ai_ready() or not _backend_ready():
         pytest.skip("AI服务或后端未启动，跳过全链路接口测试")
+
+    # 关键步骤：登录获取token
     encoded = base64.b64encode(EVAL_PASSWORD.encode("utf-8")).decode("utf-8")
     login_resp = requests.post(
         f"{BACKEND_BASE_URL}/autotest/login",
@@ -83,6 +123,8 @@ def runtime_context() -> Dict[str, str]:
     assert login_resp.status_code == 200
     token = str(login_resp.headers.get("token") or "").strip()
     assert token
+
+    # 关键步骤：获取项目列表
     projects_resp = requests.post(
         f"{BACKEND_BASE_URL}/autotest/project/list/1/2000",
         json={},
@@ -91,6 +133,8 @@ def runtime_context() -> Dict[str, str]:
     )
     assert projects_resp.status_code == 200
     projects = _extract_list(_unwrap_backend_data(projects_resp.json()))
+
+    # 关键步骤：找到有接口的项目
     selected_project_id = ""
     for item in projects:
         pid = str(item.get("id") or "")
@@ -108,6 +152,7 @@ def runtime_context() -> Dict[str, str]:
         if api_list:
             selected_project_id = pid
             break
+
     assert selected_project_id
     return {"token": token, "project_id": selected_project_id}
 
