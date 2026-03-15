@@ -1,6 +1,18 @@
 """
 配置管理模块
 负责加载和管理AI服务的配置信息，支持YAML配置与环境变量覆盖
+
+配置优先级：
+    1. 环境变量（最高优先级）
+    2. config.yaml 文件
+    3. 默认值（最低优先级）
+
+配置项分类：
+    - LLM配置：提供商、模型、API Key、温度参数等
+    - Embedding配置：模型、设备、批处理大小
+    - Chroma向量库配置：持久化目录、集合名
+    - 平台配置：后端地址、超时时间
+    - 服务配置：监听地址、端口、CORS
 """
 
 import os
@@ -13,11 +25,17 @@ from dotenv import load_dotenv
 class Config:
     """
     配置管理单例（Singleton）
+
     职责：读取 config.yaml，并支持环境变量覆盖敏感配置。
 
     一、配置文件加载：项目根目录下的 config.yaml
     二、环境变量覆盖：DEEPSEEK_API_KEY / OPENAI_API_KEY / PLATFORM_BASE_URL
     三、配置访问：通过 get() 方法或属性访问器获取配置值
+
+    示例：
+        config = Config()
+        api_key = config.llm_api_key  # 获取LLM API Key
+        port = config.get("server.port", 8001)  # 带默认值的获取
     """
 
     _instance: Optional["Config"] = None
@@ -32,6 +50,7 @@ class Config:
     def _load_config(self) -> None:
         """
         加载配置文件
+
         步骤：
             1. 查找项目根目录的 config.yaml
             2. 解析 YAML 内容到内部字典
@@ -48,6 +67,7 @@ class Config:
     def _load_env_overrides(self) -> None:
         """
         环境变量覆盖配置
+
         覆盖规则：
             1. DEEPSEEK_API_KEY -> llm.api_key
             2. OPENAI_API_KEY -> llm.api_key
@@ -70,10 +90,16 @@ class Config:
             if "platform" not in self._config:
                 self._config["platform"] = {}
             self._config["platform"]["base_url"] = os.getenv("PLATFORM_BASE_URL")
+
+        # LangSmith配置覆盖
         if os.getenv("LANGSMITH_API_KEY"):
             if "langsmith" not in self._config:
                 self._config["langsmith"] = {}
             self._config["langsmith"]["api_key"] = os.getenv("LANGSMITH_API_KEY")
+        if os.getenv("LANGCHAIN_API_KEY"):
+            if "langsmith" not in self._config:
+                self._config["langsmith"] = {}
+            self._config["langsmith"]["api_key"] = os.getenv("LANGCHAIN_API_KEY")
         if os.getenv("LANGSMITH_PROJECT"):
             if "langsmith" not in self._config:
                 self._config["langsmith"] = {}
@@ -86,9 +112,14 @@ class Config:
     def get(self, key: str, default: Any = None) -> Any:
         """
         获取配置值，支持点号分隔的嵌套键
+
         @param key: 配置键，支持 "llm.provider" 格式
         @param default: 默认值
         @return: 配置值
+
+        示例：
+            config.get("llm.provider")  # 返回 "deepseek"
+            config.get("llm.nonexistent", "default")  # 返回 "default"
         """
         keys = key.split(".")
         value = self._config
@@ -124,7 +155,7 @@ class Config:
 
     @property
     def llm_temperature(self) -> float:
-        """LLM 温度参数：控制生成随机性"""
+        """LLM 温度参数：控制生成随机性（0-2）"""
         return self.get("llm.temperature", 0.7)
 
     @property
@@ -195,20 +226,36 @@ class Config:
 
     @property
     def langsmith_api_key(self) -> str:
+        """LangSmith API Key"""
         return self.get("langsmith.api_key", "")
+
+    # 别名，用于兼容其他模块
+    LANGSMITH_API_KEY = property(lambda self: self.langsmith_api_key)
 
     @property
     def langsmith_project(self) -> str:
+        """LangSmith 项目名称"""
         return self.get("langsmith.project", "test-platform-ai")
+
+    # 别名
+    LANGSMITH_PROJECT = property(lambda self: self.langsmith_project)
 
     @property
     def langsmith_tracing(self) -> bool:
+        """是否启用 LangSmith 追踪"""
         value = self.get("langsmith.tracing", False)
         if isinstance(value, bool):
             return value
         return str(value).lower() in {"1", "true", "yes", "on"}
 
+    # DeepSeek API Key 别名
+    @property
+    def DEEPSEEK_API_KEY(self) -> str:
+        """DeepSeek API Key（别名）"""
+        return self.llm_api_key
 
+
+# 全局配置实例
 config = Config()
 
 

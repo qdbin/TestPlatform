@@ -1,23 +1,23 @@
 """
-查询改写与查询扩写模块
+查询改写模块
 
-核心功能：
-    - 改写：优化用户查询表达
-    - 扩写：扩展相关查询词
-    - 融合：返回多条查询供混合检索
+职责：
+    1. 对查询进行语义改写和扩写
+    2. 生成多个查询变体以提高检索召回率
+    3. 支持同义词扩展和查询分解
+
+改写策略：
+    1. 同义词扩展：将关键词替换为同义词
+    2. 查询分解：将复杂查询分解为多个子查询
+    3. 语义改写：改变表达方式但保持语义
 
 使用示例：
     rewriter = QueryRewriter()
-    queries = rewriter.rewrite_and_expand("如何登录")
-    # ["如何登录", "用户登录步骤", "接口认证方法"]
+    queries = rewriter.rewrite_and_expand("登录接口参数")
+    # 返回: ["登录接口参数", "login接口参数", "用户登录接口参数要求"]
 """
 
-from __future__ import annotations
-
-import json
-from typing import List
-
-from app.services.llm_service import llm_service
+from typing import List, Set
 
 
 class QueryRewriter:
@@ -25,80 +25,212 @@ class QueryRewriter:
     查询改写器
 
     职责：
-        - 调用LLM对用户查询进行改写
-        - 生成扩写查询以提升召回率
-        - 失败时返回原始查询
+        - 对查询进行语义改写
+        - 生成多个查询变体
+        - 提高检索召回率
+
+    改写方法：
+        1. 同义词替换
+        2. 查询扩展
+        3. 语义变体生成
     """
 
-    def rewrite_and_expand(self, query: str) -> List[str]:
+    def __init__(self):
+        # 同义词词典
+        self.synonyms = {
+            # 接口相关
+            "接口": ["API", "接口", "服务"],
+            "API": ["接口", "API", "服务"],
+            "登录": ["login", "登录", "signin", "登陆"],
+            "注册": ["register", "注册", "signup", "创建账号"],
+            "查询": ["query", "查询", "获取", "查找", "search"],
+            "创建": ["create", "创建", "新增", "添加", "insert"],
+            "更新": ["update", "更新", "修改", "编辑", "edit"],
+            "删除": ["delete", "删除", "移除", "remove"],
+            "用户": ["user", "用户", "会员", "account"],
+            "订单": ["order", "订单", "purchase"],
+            "商品": ["product", "商品", "物品", "goods"],
+            "参数": ["parameter", "参数", "入参", "请求参数", "arguments"],
+            "返回": ["return", "返回", "响应", "response", "输出"],
+            "错误": ["error", "错误", "异常", "exception", "失败"],
+            "测试": ["test", "测试", "用例", "case"],
+            "用例": ["test case", "用例", "测试用例", "测试场景"],
+            # 功能相关
+            "验证": ["verify", "验证", "校验", "check", "确认"],
+            "权限": ["permission", "权限", "授权", "authorization"],
+            "认证": ["auth", "认证", "鉴权", "authentication"],
+            "配置": ["config", "配置", "设置", "setting"],
+            "数据": ["data", "数据", "信息", "information"],
+        }
+
+    def rewrite_and_expand(self, query: str, max_variants: int = 3) -> List[str]:
         """
-        查询改写与扩写主入口
+        改写并扩展查询
 
         实现步骤：
-            1. 构建改写Prompt
-            2. 调用LLM JSON模式生成改写/扩写结果
-            3. 解析JSON，合并去重
-            4. 失败时返回原始查询
+            1. 保留原始查询
+            2. 生成同义词变体
+            3. 生成语义扩展
+            4. 去重并限制数量
 
-        @param query: 用户原始查询
-        @return: [原始查询, 改写, 扩写1, 扩写2]
+        @param query: 原始查询
+        @param max_variants: 最大变体数量
+        @return: 查询变体列表
 
         示例：
-            输入："如何登录"
-            输出：["如何登录", "用户登录接口", "登录验证方法", "身份认证流程"]
+            输入: "登录接口参数"
+            输出: ["登录接口参数", "login接口参数", "用户登录接口参数要求"]
         """
-        # 构建改写Prompt
-        prompt = (
-            "你是检索查询改写器。"
-            "请针对输入问题给出 1 条改写和 2 条扩写，输出 JSON："
-            '{"rewrites": ["..."], "expansions": ["...", "..."]}'
-            f"\n输入问题：{query}"
-        )
-        try:
-            # 调用LLM进行改写
-            raw = llm_service.chat_json([{"role": "user", "content": prompt}])
-            payload = json.loads(raw)
-            # 提取改写和扩写结果
-            rewrites = payload.get("rewrites") if isinstance(payload, dict) else []
-            expansions = payload.get("expansions") if isinstance(payload, dict) else []
-            # 合并去重
-            result = [str(query).strip()]
-            for item in rewrites or []:
-                text = str(item).strip()
-                if text and text not in result:
-                    result.append(text)
-            for item in expansions or []:
-                text = str(item).strip()
-                if text and text not in result:
-                    result.append(text)
-            # 限制返回数量
-            return result[:4]
-        except Exception:
-            # 失败时返回原始查询
-            return [str(query).strip()]
+        if not query:
+            return []
+
+        query = query.strip()
+        variants: Set[str] = {query}  # 保留原始查询
+
+        # 生成同义词变体
+        synonym_variants = self._generate_synonym_variants(query)
+        variants.update(synonym_variants)
+
+        # 生成语义扩展
+        expanded_variants = self._generate_expanded_variants(query)
+        variants.update(expanded_variants)
+
+        # 转换为列表并限制数量
+        result = list(variants)[:max_variants]
+        return result if result else [query]
+
+    def _generate_synonym_variants(self, query: str) -> List[str]:
+        """
+        生成同义词变体
+
+        将查询中的关键词替换为同义词，生成语义相同但表述不同的查询。
+
+        @param query: 原始查询
+        @return: 同义词变体列表
+        """
+        variants = []
+
+        for keyword, synonyms in self.synonyms.items():
+            if keyword in query:
+                for synonym in synonyms:
+                    if synonym != keyword:
+                        variant = query.replace(keyword, synonym)
+                        if variant != query:
+                            variants.append(variant)
+
+        return variants[:2]  # 限制同义词变体数量
+
+    def _generate_expanded_variants(self, query: str) -> List[str]:
+        """
+        生成语义扩展变体
+
+        通过添加修饰词或改变句式来扩展查询语义。
+
+        @param query: 原始查询
+        @return: 扩展变体列表
+        """
+        variants = []
+
+        # 添加修饰词扩展
+        expansions = [
+            f"{query}说明",
+            f"{query}要求",
+            f"{query}示例",
+            f"如何{query}",
+            f"{query}文档",
+        ]
+
+        # 根据查询内容选择合适的扩展
+        if "接口" in query or "API" in query:
+            if "参数" not in query:
+                expansions.append(f"{query}参数")
+            if "返回" not in query:
+                expansions.append(f"{query}返回值")
+
+        if "用例" in query or "测试" in query:
+            if "步骤" not in query:
+                expansions.append(f"{query}步骤")
+            if "断言" not in query:
+                expansions.append(f"{query}断言")
+
+        variants.extend(expansions[:2])  # 限制扩展数量
+
+        return variants
+
+    def decompose_query(self, query: str) -> List[str]:
+        """
+        分解复杂查询
+
+        将包含多个意图的复杂查询分解为多个子查询。
+
+        @param query: 复杂查询
+        @return: 子查询列表
+
+        示例：
+            输入: "登录和注册的接口参数"
+            输出: ["登录接口参数", "注册接口参数"]
+        """
+        if not query:
+            return []
+
+        # 识别连接词
+        connectors = ["和", "与", "以及", "及", "、", "，", ",", ";", "；"]
+
+        for connector in connectors:
+            if connector in query:
+                parts = query.split(connector)
+                if len(parts) >= 2:
+                    # 尝试提取共同部分
+                    sub_queries = []
+                    for part in parts:
+                        part = part.strip()
+                        if part:
+                            sub_queries.append(part)
+                    if len(sub_queries) >= 2:
+                        return sub_queries
+
+        return [query]
 
 
+# 全局查询改写器实例
 query_rewriter = QueryRewriter()
 
 
 if __name__ == "__main__":
-    """
-    查询改写器调试代码
-
-    调试说明：
-        1. 测试查询改写
-    """
+    """查询改写器调试"""
     print("=" * 60)
     print("查询改写器调试")
     print("=" * 60)
 
-    # 测试改写
+    rewriter = QueryRewriter()
+
+    # 测试改写和扩展
     print("\n1. 查询改写测试:")
-    test_queries = ["如何登录", "用户注册接口", "接口测试"]
-    for q in test_queries:
-        result = query_rewriter.rewrite_and_expand(q)
-        print(f"   原始: {q}")
-        print(f"   结果: {result}")
+    test_queries = [
+        "登录接口参数",
+        "用户注册API",
+        "查询订单接口",
+        "创建用户测试用例",
+        "登录和注册的接口",
+    ]
+
+    for query in test_queries:
+        variants = rewriter.rewrite_and_expand(query)
+        print(f"\n   原始: {query}")
+        print(f"   改写: {variants}")
+
+    # 测试查询分解
+    print("\n2. 查询分解测试:")
+    complex_queries = [
+        "登录和注册的接口参数",
+        "查询订单、创建订单的测试用例",
+        "用户认证与权限验证",
+    ]
+
+    for query in complex_queries:
+        parts = rewriter.decompose_query(query)
+        print(f"\n   原始: {query}")
+        print(f"   分解: {parts}")
 
     print("\n" + "=" * 60)
     print("调试完成")

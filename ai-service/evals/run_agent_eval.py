@@ -110,8 +110,8 @@ def resolve_token() -> str:
     token = str(os.getenv("EVAL_TOKEN") or "").strip()
     if token:
         return token
-    account = str(os.getenv("EVAL_ACCOUNT") or "").strip()
-    password = str(os.getenv("EVAL_PASSWORD") or "").strip()
+    account = str(os.getenv("EVAL_ACCOUNT") or "LMadmin").strip()
+    password = str(os.getenv("EVAL_PASSWORD") or "Liuma@123456").strip()
     if not account or not password:
         return ""
     encoded_password = base64.b64encode(password.encode("utf-8")).decode("utf-8")
@@ -130,6 +130,60 @@ def resolve_token() -> str:
         return body_token
     except Exception:
         return ""
+
+
+def _unwrap_backend_data(payload: Dict[str, Any]) -> Any:
+    if not isinstance(payload, dict):
+        return None
+    if "data" in payload:
+        return payload.get("data")
+    return payload
+
+
+def _extract_list(data: Any) -> List[Dict[str, Any]]:
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    if isinstance(data, dict):
+        if isinstance(data.get("list"), list):
+            return [x for x in data.get("list", []) if isinstance(x, dict)]
+        if isinstance(data.get("data"), list):
+            return [x for x in data.get("data", []) if isinstance(x, dict)]
+    return []
+
+
+def resolve_project_id(token: str, preferred_project_id: str) -> str:
+    headers = {"token": token} if token else {}
+    if preferred_project_id:
+        api_resp = requests.post(
+            f"{BACKEND_BASE}/autotest/api/list/1/2000",
+            json={"projectId": preferred_project_id},
+            headers=headers,
+            timeout=20,
+        )
+        if api_resp.ok and _extract_list(_unwrap_backend_data(api_resp.json())):
+            return preferred_project_id
+    projects_resp = requests.post(
+        f"{BACKEND_BASE}/autotest/project/list/1/2000",
+        json={},
+        headers=headers,
+        timeout=20,
+    )
+    if not projects_resp.ok:
+        return preferred_project_id
+    projects = _extract_list(_unwrap_backend_data(projects_resp.json()))
+    for item in projects:
+        pid = str(item.get("id") or "")
+        if not pid:
+            continue
+        api_resp = requests.post(
+            f"{BACKEND_BASE}/autotest/api/list/1/2000",
+            json={"projectId": pid},
+            headers=headers,
+            timeout=20,
+        )
+        if api_resp.ok and _extract_list(_unwrap_backend_data(api_resp.json())):
+            return pid
+    return preferred_project_id
 
 
 def run_single(item: Dict[str, Any], token: str) -> Dict[str, Any]:
@@ -163,8 +217,9 @@ def run_single(item: Dict[str, Any], token: str) -> Dict[str, Any]:
             }
         }
     """
+    project_id = resolve_project_id(token, str(item.get("project_id") or ""))
     payload = {
-        "project_id": str(item.get("project_id") or "1"),
+        "project_id": project_id,
         "user_id": "eval-user",
         "user_requirement": item["user_requirement"],
         "selected_apis": [],

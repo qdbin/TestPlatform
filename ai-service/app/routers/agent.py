@@ -10,6 +10,13 @@ Agent路由
     - 基于 LangChain ReAct 工具链选择项目接口
     - 融合 RAG 证据、Schema 约束和历史消息生成可保存用例
     - 提供普通问答与 SSE 流式输出统一入口
+
+用例生成流程：
+    1. 拉取项目接口池
+    2. 选择候选接口（ReAct/关键词）
+    3. 读取接口详情与依赖关系
+    4. 融合RAG与Schema
+    5. LLM生成 + Pydantic校验
 """
 
 from fastapi import APIRouter, HTTPException, Request
@@ -18,13 +25,16 @@ from app.services.agent_service import agent_service
 
 router = APIRouter()
 
-# ==================== 用例生成接口 ====================
-
 
 @router.post("/generate-case")
 async def generate_case(request: GenerateCaseRequestModel, raw_request: Request):
     """
     生成测试用例（Agent调度入口）
+
+    功能说明：
+        - 接收用户需求描述，自动生成结构化测试用例
+        - 支持预选接口列表，Agent会优先使用指定接口
+        - 返回符合平台后端规范的用例JSON
 
     实现步骤：
         1. 从请求头获取token用于平台API鉴权
@@ -41,6 +51,7 @@ async def generate_case(request: GenerateCaseRequestModel, raw_request: Request)
         5. LLM生成 + Pydantic校验
     """
     try:
+        # 从请求头获取token，用于调用平台后端API
         token = raw_request.headers.get("token") or ""
 
         # Agent主流程：选接口 -> 组prompt -> 生成JSON
@@ -63,10 +74,22 @@ async def get_api_list(project_id: str, raw_request: Request):
     """
     获取接口列表供用户选择
 
-    该接口主要服务于"手动选接口 + Agent生成"协同场景
-    用户可先选择接口，再调用 generate-case 生成用例
+    功能说明：
+        - 返回项目下所有可用接口列表
+        - 用户可先选择接口，再调用 generate-case 生成用例
+        - 该接口主要服务于"手动选接口 + Agent生成"协同场景
 
+    @param project_id: 项目ID（路径参数）
     @return: {status, data: [...]}
+
+    返回数据示例：
+        {
+            "status": "success",
+            "data": [
+                {"id": "api-001", "name": "登录接口", "path": "/api/login", "method": "POST"},
+                ...
+            ]
+        }
     """
     try:
         token = raw_request.headers.get("token") or ""
@@ -88,13 +111,13 @@ if __name__ == "__main__":
     测试命令示例：
 
     # 1. 获取接口列表
-    curl -X GET "http://localhost:8001/ai/agent/api-list/test-project" \
+    curl -X GET "http://localhost:8001/ai/agent/api-list/test-project" \\
       -H "token: <your-token>"
 
     # 2. 生成用例
-    curl -X POST http://localhost:8001/ai/agent/generate-case \
-      -H "Content-Type: application/json" \
-      -H "token: <your-token>" \
+    curl -X POST http://localhost:8001/ai/agent/generate-case \\
+      -H "Content-Type: application/json" \\
+      -H "token: <your-token>" \\
       -d '{
         "project_id": "test-project",
         "user_requirement": "设计登录+注册的完整测试流程",

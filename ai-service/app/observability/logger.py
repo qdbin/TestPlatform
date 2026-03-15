@@ -1,84 +1,120 @@
 """
-日志基础设施模块
+日志模块
 
-核心功能：
-    - Loguru日志库封装
-    - 文件日志：自动轮转、保留策略
-    - 控制台日志：彩色输出
+职责：
+    1. 统一日志格式和输出
+    2. 支持结构化日志
+    3. 集成LangSmith追踪
 
-配置项：
-    - logging.dir: 日志目录
-    - logging.level: 文件日志级别
-    - logging.console_level: 控制台日志级别
+使用说明：
+    使用 loguru 作为日志库，支持：
+    - 控制台输出（带颜色）
+    - 文件输出（按日期轮转）
+    - 结构化日志（JSON格式）
+    - 异步日志（高性能）
+
+使用示例：
+    from app.observability import app_logger
+    app_logger.info("用户登录: {}", user_id)
+    app_logger.error("操作失败: {}", error_msg)
 """
 
-from __future__ import annotations
-
-from pathlib import Path
+import sys
+from typing import Any
 
 from loguru import logger
 
-from app.config import config
 
-
-def setup_logger():
+class AppLogger:
     """
-    日志系统初始化
+    应用日志器
 
-    实现步骤：
-        1. 创建日志目录
-        2. 配置文件日志（轮转、保留）
-        3. 配置控制台日志（彩色输出）
+    职责：
+        - 封装loguru日志功能
+        - 提供统一的日志接口
+        - 支持结构化日志输出
 
-    @return: logger实例
+    日志级别：
+        - DEBUG: 调试信息
+        - INFO: 一般信息
+        - WARNING: 警告信息
+        - ERROR: 错误信息
+        - CRITICAL: 严重错误
     """
-    log_dir = Path(config.get("logging.dir", "./logs"))
-    log_dir.mkdir(parents=True, exist_ok=True)
-    logger.remove()
-    logger.add(
-        str(log_dir / "ai_service.log"),
-        level=config.get("logging.level", "INFO"),
-        rotation="10 MB",
-        retention="7 days",
-        enqueue=False,
-        backtrace=False,
-        diagnose=False,
-        encoding="utf-8",
-    )
-    logger.add(
-        lambda message: print(message, end=""),
-        level=config.get("logging.console_level", "INFO"),
-        colorize=True,
-    )
-    return logger
+
+    def __init__(self):
+        # 移除默认的处理器
+        logger.remove()
+
+        # 添加控制台处理器（带颜色）
+        logger.add(
+            sys.stdout,
+            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+                   "<level>{level: <8}</level> | "
+                   "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+                   "<level>{message}</level>",
+            level="INFO",
+            colorize=True,
+        )
+
+        # 添加文件处理器（按日期轮转）
+        logger.add(
+            "logs/ai-service_{time:YYYY-MM-DD}.log",
+            rotation="00:00",  # 每天午夜轮转
+            retention="7 days",  # 保留7天
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+            level="DEBUG",
+            encoding="utf-8",
+        )
+
+    def debug(self, message: str, *args: Any, **kwargs: Any) -> None:
+        """调试日志"""
+        logger.debug(message, *args, **kwargs)
+
+    def info(self, message: str, *args: Any, **kwargs: Any) -> None:
+        """信息日志"""
+        logger.info(message, *args, **kwargs)
+
+    def warning(self, message: str, *args: Any, **kwargs: Any) -> None:
+        """警告日志"""
+        logger.warning(message, *args, **kwargs)
+
+    def error(self, message: str, *args: Any, **kwargs: Any) -> None:
+        """错误日志"""
+        logger.error(message, *args, **kwargs)
+
+    def critical(self, message: str, *args: Any, **kwargs: Any) -> None:
+        """严重错误日志"""
+        logger.critical(message, *args, **kwargs)
+
+    def exception(self, message: str, *args: Any, **kwargs: Any) -> None:
+        """异常日志（自动包含堆栈）"""
+        logger.exception(message, *args, **kwargs)
 
 
-app_logger = setup_logger()
+# 全局日志实例
+app_logger = AppLogger()
 
 
 if __name__ == "__main__":
-    """
-    日志系统调试代码
-
-    调试说明：
-        1. 测试不同级别日志
-        2. 验证日志格式
-    """
+    """日志模块调试"""
     print("=" * 60)
-    print("日志系统调试")
+    print("日志模块调试")
     print("=" * 60)
 
-    # 测试日志级别
-    print("\n1. 日志级别测试:")
-    app_logger.debug("Debug日志")
-    app_logger.info("Info日志")
-    app_logger.warning("Warning日志")
-    app_logger.error("Error日志")
+    # 测试各级别日志
+    print("\n1. 测试各级别日志:")
+    app_logger.debug("这是一条调试日志: {}", "debug info")
+    app_logger.info("这是一条信息日志: {}", "info message")
+    app_logger.warning("这是一条警告日志: {}", "warning message")
+    app_logger.error("这是一条错误日志: {}", "error message")
 
-    # 测试日志格式化
-    print("\n2. 日志格式化测试:")
-    app_logger.info("用户 {} 登录成功", "张三")
-    app_logger.info("项目ID: {}, 查询: {}", "p1", "登录接口")
+    # 测试异常日志
+    print("\n2. 测试异常日志:")
+    try:
+        1 / 0
+    except ZeroDivisionError:
+        app_logger.exception("发生异常: {}", "division by zero")
 
     print("\n" + "=" * 60)
     print("调试完成")

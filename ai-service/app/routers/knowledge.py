@@ -11,6 +11,18 @@ RAG知识库路由
 数据隔离：
     - 项目级隔离：通过 project_id 元数据过滤
     - 文档级隔离：通过 doc_id 标识每个文档
+
+索引流程：
+    1. 接收文档内容
+    2. Markdown父子切片
+    3. Embedding向量化
+    4. Chroma向量库存储
+
+检索流程：
+    1. 查询改写与扩写
+    2. 并行向量检索 + 关键词检索
+    3. RRF融合与重排序
+    4. 返回Top-K结果
 """
 
 from fastapi import APIRouter, HTTPException
@@ -20,13 +32,16 @@ from app.utils.markdown_parent_child_chunking import markdown_parent_child_chunk
 
 router = APIRouter()
 
-# ==================== 知识文档接口 ====================
-
 
 @router.post("/add")
 async def add_document(request: RagAddRequestModel):
     """
     新增/重建知识文档索引
+
+    功能说明：
+        - 将文档内容切片并写入向量库
+        - 支持重建已有文档索引（先删除后重建）
+        - 返回索引状态和降级信息
 
     实现步骤：
         1. 使用 markdown_parent_child_chunker 解析文档内容
@@ -34,6 +49,10 @@ async def add_document(request: RagAddRequestModel):
         3. 返回索引结果（含降级状态）
 
     @return: {status, indexed, degraded, vector_count, error}
+
+    降级说明：
+        - 当Embedding服务不可用时，自动降级为哈希向量
+        - degraded=true 表示使用了降级策略
     """
     try:
         # 步骤1：文档切片 - 按 Markdown 标题层级分块
@@ -66,6 +85,10 @@ async def delete_document(request: RagDeleteRequestModel):
     """
     删除知识文档对应向量分片
 
+    功能说明：
+        - 根据 project_id 和 doc_id 删除对应向量
+        - 删除该文档的所有分片
+
     @return: {status, vector_deleted}
     """
     try:
@@ -83,6 +106,11 @@ async def delete_document(request: RagDeleteRequestModel):
 async def query_knowledge(request: RagQueryRequestModel):
     """
     查询知识库并返回上下文答案
+
+    功能说明：
+        - 执行混合检索（向量+关键词+重排序）
+        - 返回检索结果和组装后的上下文
+        - 根据检索状态返回友好的错误提示
 
     实现步骤：
         1. 调用 rag_service.search_with_status() 执行混合检索
@@ -143,7 +171,11 @@ async def get_stats(project_id: str):
     """
     获取项目维度知识库统计信息
 
-    @param project_id: 项目ID
+    功能说明：
+        - 统计项目下索引的文档分片数量
+        - 用于前端展示知识库状态
+
+    @param project_id: 项目ID（路径参数）
     @return: {status, data: {count, project_id, collection_name}}
     """
     try:
@@ -166,8 +198,8 @@ if __name__ == "__main__":
     测试命令示例：
 
     # 1. 新增文档
-    curl -X POST http://localhost:8001/ai/rag/add \
-      -H "Content-Type: application/json" \
+    curl -X POST http://localhost:8001/ai/rag/add \\
+      -H "Content-Type: application/json" \\
       -d '{
         "project_id": "test-project",
         "doc_id": "doc-001",
@@ -177,8 +209,8 @@ if __name__ == "__main__":
       }'
 
     # 2. 知识检索
-    curl -X POST http://localhost:8001/ai/rag/query \
-      -H "Content-Type: application/json" \
+    curl -X POST http://localhost:8001/ai/rag/query \\
+      -H "Content-Type: application/json" \\
       -d '{
         "project_id": "test-project",
         "question": "登录接口需要哪些参数？",
@@ -186,8 +218,8 @@ if __name__ == "__main__":
       }'
 
     # 3. 删除文档
-    curl -X POST http://localhost:8001/ai/rag/delete \
-      -H "Content-Type: application/json" \
+    curl -X POST http://localhost:8001/ai/rag/delete \\
+      -H "Content-Type: application/json" \\
       -d '{
         "project_id": "test-project",
         "doc_id": "doc-001"

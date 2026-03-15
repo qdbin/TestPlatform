@@ -1,6 +1,17 @@
 """
 AI智能测试助手服务入口
 FastAPI主应用配置和启动
+
+核心职责：
+    1. FastAPI应用初始化与中间件配置
+    2. 路由注册（AI对话、RAG知识库、用例生成）
+    3. 健康检查接口
+    4. 服务启动入口
+
+架构说明：
+    - 前端(Vue) → 后端(SpringBoot) → AI服务(FastAPI)
+    - AI服务通过HTTP与SpringBoot后端通信
+    - 使用SSE实现流式对话响应
 """
 
 from fastapi import FastAPI
@@ -8,11 +19,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import config
 from app.observability import app_logger, setup_langsmith
 
-# 路由导入
+# ==================== 路由导入 ====================
 from app.routers import chat, knowledge, agent
 
 
 # ==================== FastAPI 应用初始化 ====================
+# 初始化LangSmith追踪配置
 setup_langsmith()
 
 # 创建FastAPI应用实例
@@ -26,17 +38,19 @@ app = FastAPI(
 # 配置跨域资源共享，允许前端应用访问
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=config.cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=config.cors_origins,  # 允许的源地址列表
+    allow_credentials=True,  # 允许携带凭证（cookie等）
+    allow_methods=["*"],  # 允许所有HTTP方法
+    allow_headers=["*"],  # 允许所有请求头
 )
 
 # ==================== 路由注册 ====================
 # AI对话路由：/ai/chat/stream - SSE流式对话
 app.include_router(chat.router, prefix="/ai", tags=["AI对话"])
+
 # RAG知识库路由：/ai/rag/add, /ai/rag/query
 app.include_router(knowledge.router, prefix="/ai/rag", tags=["RAG"])
+
 # 用例生成路由：/ai/agent/generate-case
 app.include_router(agent.router, prefix="/ai/agent", tags=["用例生成"])
 

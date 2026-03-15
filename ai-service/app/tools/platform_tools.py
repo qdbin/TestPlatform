@@ -1,195 +1,203 @@
 """
-平台API客户端工具
-用于Agent调用平台API获取数据
+平台API工具模块
+
+职责：
+    1. 封装与SpringBoot后端的HTTP通信
+    2. 提供接口查询、详情获取、Schema获取等功能
+    3. 处理认证和错误处理
+
+核心类：
+    - PlatformClient: 平台API客户端
+
+主要方法：
+    - get_api_list(): 获取项目接口列表
+    - get_api_detail(): 获取接口详情
+    - get_case_schema(): 获取用例Schema
+
+请求配置：
+    - base_url: 从 config.platform_base_url 读取
+    - timeout: 默认30秒
+    - headers: 包含token认证
 """
 
+from typing import Any, Dict, List, Optional
 import httpx
-from typing import Optional, List, Dict, Any
+
 from app.config import config
+from app.observability import app_logger
 
 
 class PlatformClient:
     """
-    平台API客户端。
-    职责：封装 AI 服务到测试平台后端的 RPC/HTTP 调用细节。
+    平台API客户端
+
+    职责：
+        - 封装与SpringBoot后端的HTTP通信
+        - 提供接口查询功能
+        - 处理认证和错误
+
+    使用示例：
+        client = PlatformClient(token="xxx")
+        apis = client.get_api_list("project-id")
+        detail = client.get_api_detail("api-id")
     """
 
-    def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):
-        self.base_url = base_url or config.platform_base_url
-        self.api_key = api_key or ""
+    def __init__(self, token: str = ""):
+        """
+        初始化平台客户端
+
+        @param token: 认证token（从请求头传递）
+        """
+        self.base_url = config.platform_base_url.rstrip("/")
+        self.token = token
         self.timeout = config.platform_timeout
-        self.last_error = ""
+        self._last_error: Optional[str] = None
 
     def _get_headers(self) -> Dict[str, str]:
-        """
-        构建请求头。
-        token 由上层透传，用于复用平台登录态。
-        """
-        headers = {
-            "Content-Type": "application/json",
-            "token": self.api_key,
-        }
+        """构建请求头"""
+        headers = {"Content-Type": "application/json"}
+        if self.token:
+            headers["token"] = self.token
         return headers
-
-    def _mark_error(self, message: str):
-        self.last_error = str(message or "")
-
-    def get_last_error(self) -> str:
-        return self.last_error
-
-    def _extract_success_data(self, payload: Any) -> Any:
-        # 平台统一响应兼容：
-        # {"status":0,"data":...} 或 {"status":"success","data":...}
-        if not isinstance(payload, dict):
-            self._mark_error("平台响应格式错误")
-            return None
-        status = payload.get("status")
-        if status not in (
-            0,
-            "0",
-            "success",
-            "SUCCESS",
-            True,
-            None,
-        ):  # 平台多版本状态码兼容
-            self._mark_error(str(payload.get("message") or "平台业务状态异常"))
-            return None
-        self._mark_error("")
-        return payload.get("data")
 
     def get_api_list(self, project_id: str) -> List[Dict[str, Any]]:
         """
         获取项目接口列表
 
-        Args:
-            project_id: 项目ID
+        @param project_id: 项目ID
+        @return: 接口列表
 
-        Returns:
-            接口列表
+        请求示例：
+            GET /autotest/api/list?projectId={project_id}
+
+        返回示例：
+            [
+                {"id": "api-001", "name": "登录接口", "path": "/api/login", "method": "POST"},
+                ...
+            ]
         """
         try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.post(
-                    f"{self.base_url}/autotest/api/list/1/2000",
-                    json={"projectId": project_id},
-                    headers=self._get_headers(),
-                )
-                if response.status_code == 200:
-                    payload = response.json() or {}
-                    outer_data = self._extract_success_data(payload)
-                    if outer_data is None and self.last_error:
-                        return []
-                    if isinstance(outer_data, dict):
-                        if isinstance(outer_data.get("data"), list):
-                            return outer_data.get("data")
-                        if isinstance(outer_data.get("list"), list):
-                            return outer_data.get("list")
-                    if isinstance(outer_data, list):
-                        return outer_data
-                    self._mark_error("接口列表为空或返回结构不匹配")
-                    return []
-                self._mark_error(f"HTTP {response.status_code}")
+            url = f"{self.base_url}/autotest/api/list"
+            params = {"projectId": project_id}
+
+            response = httpx.get(
+                url,
+                params=params,
+                headers=self._get_headers(),
+                timeout=self.timeout,
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, dict) and "data" in data:
+                    return data.get("data") or []
+                return data if isinstance(data, list) else []
+            else:
+                self._last_error = f"API列表获取失败: HTTP {response.status_code}"
+                app_logger.error("{}", self._last_error)
                 return []
+
         except Exception as e:
-            self._mark_error(f"获取接口列表失败: {e}")
+            self._last_error = f"API列表获取异常: {str(e)}"
+            app_logger.error("{}", self._last_error)
             return []
 
     def get_api_detail(self, api_id: str) -> Optional[Dict[str, Any]]:
         """
         获取接口详情
 
-        Args:
-            api_id: 接口ID
+        @param api_id: 接口ID
+        @return: 接口详情
 
-        Returns:
-            接口详情
+        请求示例：
+            GET /autotest/api/detail/{api_id}
+
+        返回示例：
+            {
+                "id": "api-001",
+                "name": "登录接口",
+                "path": "/api/login",
+                "method": "POST",
+                "headers": [...],
+                "body": {...},
+                ...
+            }
         """
         try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.get(
-                    f"{self.base_url}/autotest/api/detail/{api_id}",
-                    headers=self._get_headers(),
-                )
-                if response.status_code == 200:
-                    payload = response.json() or {}
-                    data = self._extract_success_data(payload)
-                    if isinstance(data, dict):
-                        return data
-                    self._mark_error("接口详情为空")
-                    return None
-                self._mark_error(f"HTTP {response.status_code}")
+            url = f"{self.base_url}/autotest/api/detail/{api_id}"
+
+            response = httpx.get(
+                url,
+                headers=self._get_headers(),
+                timeout=self.timeout,
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, dict) and "data" in data:
+                    return data.get("data")
+                return data if isinstance(data, dict) else None
+            else:
+                app_logger.error("接口详情获取失败: HTTP {}", response.status_code)
                 return None
+
         except Exception as e:
-            self._mark_error(f"获取接口详情失败: {e}")
+            app_logger.error("接口详情获取异常: {}", str(e))
             return None
 
-    def get_case_schema(self, project_id: str) -> Dict[str, Any]:
+    def get_case_schema(self, project_id: str) -> Optional[Dict[str, Any]]:
         """
-        获取后端CaseRequest相关Schema，供Agent约束输出结构。
+        获取用例Schema
+
+        用于用例生成时了解用例的数据结构要求。
+
         @param project_id: 项目ID
-        @return: schema字典，失败返回 {}
-        返回示例：
-        {"CaseRequest": {...}, "CaseApiRequest": {...}}
+        @return: 用例Schema
         """
         try:
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.get(
-                    f"{self.base_url}/autotest/ai/schema/case",
-                    params={"projectId": project_id},
-                    headers=self._get_headers(),
-                )
-                if response.status_code == 200:
-                    payload = response.json() or {}
-                    data = self._extract_success_data(payload)
-                    if isinstance(data, dict):
-                        return data
-                return {}
+            url = f"{self.base_url}/autotest/case/schema"
+            params = {"projectId": project_id}
+
+            response = httpx.get(
+                url,
+                params=params,
+                headers=self._get_headers(),
+                timeout=self.timeout,
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, dict) and "data" in data:
+                    return data.get("data")
+                return data if isinstance(data, dict) else None
+            else:
+                app_logger.error("用例Schema获取失败: HTTP {}", response.status_code)
+                return None
+
         except Exception as e:
-            self._mark_error(f"获取Case Schema失败: {e}")
-            return {}
+            app_logger.error("用例Schema获取异常: {}", str(e))
+            return None
 
-
-def get_platform_client(token: Optional[str] = None) -> PlatformClient:
-    return PlatformClient(api_key=token or "")
+    def get_last_error(self) -> Optional[str]:
+        """获取最后一次错误信息"""
+        return self._last_error
 
 
 if __name__ == "__main__":
-    """
-    平台API客户端调试代码
-
-    调试说明：
-        1. 测试获取接口列表
-        2. 测试获取接口详情
-        3. 测试获取用例Schema
-
-    注意：需要正确配置 PLATFORM_BASE_URL
-    """
+    """平台API客户端调试"""
     print("=" * 60)
     print("平台API客户端调试")
     print("=" * 60)
 
-    # 测试1：获取接口列表
-    print("\n1. 获取接口列表测试:")
-    client = get_platform_client(token="test-token")
-    print(f"   平台地址: {client.base_url}")
-    api_list = client.get_api_list("test-project")
-    print(f"   接口数量: {len(api_list)}")
-    if api_list:
-        print(f"   第一个接口: {api_list[0].get('name')}")
+    # 注意：需要配置正确的平台地址和token才能测试
+    print("\n平台配置:")
+    print(f"   Base URL: {config.platform_base_url}")
+    print(f"   Timeout: {config.platform_timeout}s")
 
-    # 测试2：获取接口详情
-    print("\n2. 获取接口详情测试:")
-    if api_list and len(api_list) > 0:
-        first_api_id = api_list[0].get("id")
-        api_detail = client.get_api_detail(str(first_api_id))
-        print(f"   接口ID: {first_api_id}")
-        print(f"   获取结果: {'成功' if api_detail else '失败'}")
+    print("\n客户端初始化:")
+    client = PlatformClient(token="test-token")
+    print(f"   Token: {client.token}")
+    print(f"   Headers: {client._get_headers()}")
 
-    # 测试3：获取用例Schema
-    print("\n3. 获取用例Schema测试:")
-    schema = client.get_case_schema("test-project")
-    print(f"   Schema keys: {list(schema.keys()) if schema else '空'}")
-
-    print("\n" + "=" * 60)
-    print("调试完成")
+    print("\n注意：实际API调用需要正确的平台地址和token")
     print("=" * 60)

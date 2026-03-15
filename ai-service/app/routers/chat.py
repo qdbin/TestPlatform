@@ -3,7 +3,7 @@ AI对话路由
 处理AI聊天相关请求，支持SSE流式输出
 
 核心功能：
-    1. /ai/chat/stream - SSE流式对话接口
+    1. POST /ai/chat/stream - SSE流式对话接口
     2. 自动识别用例需求并分流处理
 
 请求格式：
@@ -19,6 +19,11 @@ AI对话路由
     {"type": "case", "case": {...}, "api_ids": [...]}
     {"type": "error", "message": "..."}
     {"type": "end"}
+
+SSE协议说明：
+    - Content-Type: text/event-stream
+    - 每个事件以 data: {...}\n\n 格式发送
+    - 前端按 \n\n 分帧消费
 """
 
 from fastapi import APIRouter, Request
@@ -36,6 +41,11 @@ async def chat_stream(request: ChatRequestModel, raw_request: Request):
     """
     AI对话接口（SSE流式输出）
 
+    功能说明：
+        - 接收用户消息，返回AI回复的SSE流
+        - 自动识别用例生成需求并分流处理
+        - 支持RAG知识库检索增强回答
+
     @param request: 聊天请求体，包含项目ID、消息、配置
     @param raw_request: 原始HTTP请求，用于提取token
     @return: text/event-stream 响应
@@ -47,14 +57,14 @@ async def chat_stream(request: ChatRequestModel, raw_request: Request):
         4. 捕获异常并转换为错误事件
     """
 
-    def generate():
+    async def generate():
         try:
             # 步骤1：从请求头获取token用于平台API鉴权
             token = raw_request.headers.get("token") or ""
 
             # 步骤2：调用Agent服务获取流式响应
             # Agent层负责流式事件编排，区分问答/用例生成
-            for event in agent_service.stream_chat(
+            async for event in agent_service.stream_chat(
                 project_id=request.project_id,
                 token=token,
                 message=request.message,
@@ -66,9 +76,6 @@ async def chat_stream(request: ChatRequestModel, raw_request: Request):
                 # 前端按 \n\n 分帧消费
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
-            # 正常收尾事件，前端据此停止读取
-            yield f"data: {json.dumps({'type': 'end'}, ensure_ascii=False)}\n\n"
-
         except Exception as e:
             # 异常也按SSE事件输出，避免前端读流阻塞
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
@@ -78,8 +85,8 @@ async def chat_stream(request: ChatRequestModel, raw_request: Request):
         generate(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
+            "Cache-Control": "no-cache",  # 禁用缓存
+            "Connection": "keep-alive",  # 保持长连接
             "X-Accel-Buffering": "no",  # 禁用Nginx缓冲，确保实时推送
         },
     )
@@ -94,9 +101,9 @@ if __name__ == "__main__":
         2. 注意：此处仅为演示，实际需要完整的 token 认证
 
     测试命令示例：
-        curl -X POST http://localhost:8001/ai/chat/stream \
-        -H "Content-Type: application/json" \
-        -H "token: <your-token>" \
+        curl -X POST http://localhost:8001/ai/chat/stream \\
+        -H "Content-Type: application/json" \\
+        -H "token: <your-token>" \\
         -d '{"project_id": "test-project", "message": "你好", "use_rag": true}'
     """
     print("=" * 60)
