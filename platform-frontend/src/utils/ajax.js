@@ -31,6 +31,12 @@ function getTokenConfig(token) {
   };
 }
 
+function ensureRequestUrl(url) {
+  if (typeof url !== 'string' || !url.trim()) {
+    throw new Error('请求地址无效');
+  }
+}
+
 // 退出登录：清空状态并跳转登录页
 function logout(store, router){
   store.commit('del_userInfo');
@@ -100,6 +106,7 @@ export function login(url, data, success) {
 // GET请求：自动附带token
 export function get(url, success) {
   let result = {loading: true};
+  ensureRequestUrl(url);
   let config = getTokenConfig(this.$store.state.token);
   if (!success) {
     return axios.get(url, config);
@@ -119,6 +126,7 @@ export function get(url, success) {
 // POST请求：自动附带token
 export function post(url, data, success) {
   let result = {loading: true};
+  ensureRequestUrl(url);
   let config = getTokenConfig(this.$store.state.token);
   // 如果无自定回调则直接post
   if (!success) {
@@ -139,9 +147,35 @@ export function post(url, data, success) {
   }
 }
 
+// DELETE请求：自动附带token
+export function del(url, success) {
+  let result = {loading: true};
+  ensureRequestUrl(url);
+  let config = getTokenConfig(this.$store.state.token);
+  if (!success) {
+    return axios.delete(url, config);
+  } else {
+    axios.delete(url, config).then(response => {
+      let res = then(success, response, result);
+      if(res == false){
+        logout(this.$store, this.$router);
+      }
+    }).catch(error => {
+      exception(error, result, url);
+    });
+    return result;
+  }
+}
+
 // 通用请求：axios.request透传配置
 export function request(axiosRequestConfig, success) {
   let result = {loading: true};
+  if (!axiosRequestConfig || typeof axiosRequestConfig !== 'object') {
+    throw new Error('请求参数无效');
+  }
+  if (axiosRequestConfig.url !== undefined) {
+    ensureRequestUrl(axiosRequestConfig.url);
+  }
   if (!success) {
     return axios.request(axiosRequestConfig);
   } else {
@@ -205,6 +239,8 @@ export default {
     Vue.prototype.$get = get; // GET
 
     Vue.prototype.$post = post; // POST
+
+    Vue.prototype.$delete = del; // DELETE
 
     Vue.prototype.$request = request; // 通用请求
 

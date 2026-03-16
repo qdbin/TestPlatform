@@ -1,65 +1,92 @@
-# 流马自动化测试平台
+# AI智能接口测试平台
 
 ## 一、项目概述
 
-### 1.1 项目简介
+### 1.1 项目定位
 
-流马自动化测试平台（LiuMa AutoTest Platform）是一款**低代码**分布式自动化测试平台，旨在采用最简单的架构统一支持 **API / Web UI / App UI** 三种自动化测试类型。平台采用前后端分离设计，将传统测试脚本以**配置化**实现，让代码能力稍弱的用户也能快速上手自动化测试。同时平台支持通过简单的代码编写实现自定义组件，满足个性化需求。
-
-> **项目定位**：作者在 GitHub 开源项目基础上，主要实现了 **API 自动化测试** 相关的核心模块，包含测试管理、环境配置、用例设计、定时计划、分布式执行引擎等核心功能。
+AI智能接口测试平台是一款基于 **LangChain + Pytest** 的低代码分布式接口自动化测试平台。平台采用前后端分离架构，通过可视化配置实现接口测试，同时集成AI智能助手，提供RAG知识库问答和智能用例生成功能。
 
 ### 1.2 核心特性
 
-| 特性                 | 说明                                             |
-| -------------------- | ------------------------------------------------ |
+| 特性 | 说明 |
+|------|------|
 | **低代码配置** | 可视化配置测试用例，无需编写代码即可完成接口测试 |
-| **分布式执行** | 测试引擎可注册到任意机器，突破资源与网络限制     |
-| **前后端分离** | SpringBoot + Vue 分离架构，便于扩展和维护        |
-| **实时通信**   | WebSocket 双向通信，任务实时推送与结果回传       |
-| **多测试类型** | 支持 API 接口测试、Web UI 自动化、App 自动化     |
-| **定时任务**   | 支持 Cron 表达式配置定时执行计划                 |
-| **RBAC 权限**  | 基于角色的权限控制，支持多项目数据隔离           |
+| **AI智能助手** | 基于LangChain的RAG知识库问答和智能用例生成 |
+| **分布式执行** | 测试引擎可注册到任意机器，突破资源与网络限制 |
+| **Pytest引擎** | 基于Pytest的测试执行引擎，支持插件扩展 |
+| **双通道报告** | 平台推送 + Allure报告，0业务侵入的观察者模式 |
+| **前后端分离** | SpringBoot + Vue 分离架构，便于扩展和维护 |
+| **实时通信** | WebSocket双向通信，任务实时推送与结果回传 |
+| **定时任务** | 支持Cron表达式配置定时执行计划 |
+| **RBAC权限** | 基于角色的权限控制，支持多项目数据隔离 |
 
-### 1.3 技术栈
+### 1.3 技术架构
 
 ```mermaid
-graph LR
-    subgraph 前端[前端技术栈]
-        A[Vue 2.7] --> B[Element UI]
-        A --> C[Vue Router]
-        A --> D[Vuex]
-        A --> E[Axios]
+flowchart TB
+    subgraph 前端层["前端展示层 (Vue 2.7)"]
+        VUE["Vue 2.7 + Element UI"]
+        AI_CHAT["AI助手模块"]
+        CASE_MGR["用例管理"]
+        PLAN_MGR["计划管理"]
+        REPORT["测试报告"]
     end
 
-    subgraph 后端[后端技术栈]
-        F[SpringBoot 2.6] --> G[MyBatis]
-        F --> H[JWT]
-        F --> I[WebSocket]
-        F --> J[Spring Task]
+    subgraph 后端层["后端服务层 (SpringBoot)"]
+        SB["SpringBoot 2.6"]
+        CTRL["Controller层"]
+        SVC["Service层"]
+        WS["WebSocket通信"]
+        AUTH["JWT认证"]
     end
 
-    subgraph 引擎[测试引擎]
-        K[Python 3.8] --> L[Unittest]
-        K --> M[Requests]
-        K --> N[Selenium]
+    subgraph AI层["AI服务层 (FastAPI)"]
+        FAST["FastAPI"]
+        RAG["RAG检索服务"]
+        AGENT["用例生成Agent"]
+        LLM["LLM服务"]
+        CHROMA["Chroma向量库"]
     end
 
-    subgraph 存储[数据存储]
-        O[MySQL 5.7+] --> P[Flyway]
+    subgraph 引擎层["测试执行引擎 (Python)"]
+        ENG["Pytest引擎"]
+        COLLECT["JSON收集器"]
+        HOOKS["Pytest钩子"]
+        EXEC["ApiTestCase执行"]
+        ALLURE["Allure报告"]
     end
+
+    subgraph 存储层["数据存储层"]
+        MYSQL["MySQL 5.7+"]
+        CHROMA_DB["Chroma向量库"]
+    end
+
+    VUE -->|HTTP/REST| SB
+    AI_CHAT -->|SSE流式| FAST
+    SB -->|HTTP| FAST
+    SB <-->|WebSocket| ENG
+    FAST --> CHROMA
+    RAG --> CHROMA_DB
+    ENG --> MYSQL
+    SB --> MYSQL
 ```
 
-| 层级        | 技术选型   | 版本    |
-| ----------- | ---------- | ------- |
-| 前端框架    | Vue        | 2.7.16  |
-| UI 组件     | Element UI | 2.15.13 |
-| 构建工具    | Vite       | 4.5.0   |
-| 后端框架    | SpringBoot | 2.6.0   |
-| ORM 框架    | MyBatis    | 2.2.0   |
-| 数据库      | MySQL      | 5.7+    |
-| 测试引擎    | Python     | 3.8+    |
-| HTTP 客户端 | Requests   | -       |
-| Web 自动化  | Selenium   | -       |
+### 1.4 技术栈
+
+| 层级 | 技术选型 | 版本 | 说明 |
+|------|----------|------|------|
+| 前端框架 | Vue | 2.7.16 | 渐进式前端框架 |
+| UI组件 | Element UI | 2.15.13 | UI组件库 |
+| 构建工具 | Vite | 4.5.0 | 前端构建工具 |
+| 后端框架 | SpringBoot | 2.6.0 | 后端核心框架 |
+| ORM框架 | MyBatis | 2.2.0 | ORM持久层框架 |
+| AI服务 | FastAPI | - | 高性能异步Web框架 |
+| LLM框架 | LangChain | 1.x | LLM应用开发框架 |
+| 向量数据库 | Chroma | - | 轻量级向量数据库 |
+| 测试引擎 | Python | 3.8+ | 测试执行引擎 |
+| 测试框架 | Pytest | - | API测试框架 |
+| 数据库 | MySQL | 5.7+ | 关系型数据库 |
+| HTTP客户端 | Requests | - | HTTP请求处理 |
 
 ---
 
@@ -69,50 +96,132 @@ graph LR
 
 ```mermaid
 flowchart TD
-    subgraph 客户端[前端展示层]
-        A[Web 浏览器]
+    subgraph 客户端["客户端层"]
+        BROWSER["Web浏览器"]
     end
 
-    subgraph 平台端[平台服务端]
-        B[前端服务 Vue]
-        C[后端服务 SpringBoot]
-        D[(MySQL 数据库)]
+    subgraph 平台端["平台服务端"]
+        FE["前端服务 Vue"]
+        BE["后端服务 SpringBoot"]
+        DB["MySQL数据库"]
     end
 
-    subgraph 引擎层[分布式执行引擎]
-        E[Engine 1]
-        F[Engine 2]
-        G[Engine N]
+    subgraph AI服务["AI智能服务"]
+        AI_API["FastAPI服务"]
+        RAG_SVC["RAG检索服务<br/>向量+BM25+重排序"]
+        AGENT_SVC["Agent服务<br/>用例生成工作流"]
+        LLM_SVC["LLM服务<br/>DeepSeek/OpenAI"]
+        EMB["Embedding服务"]
+        VS["Chroma向量库"]
     end
 
-    A -->|HTTP/HTTPS| B
-    B -->|RESTful API| C
-    C -->|MyBatis| D
-    C <-->|WebSocket| E
-    C <-->|WebSocket| F
-    C <-->|WebSocket| G
+    subgraph 引擎端["分布式执行引擎"]
+        E1["Engine 1<br/>Pytest执行"]
+        E2["Engine 2<br/>Pytest执行"]
+        E3["Engine N<br/>Pytest执行"]
+    end
+
+    BROWSER -->|HTTP| FE
+    FE -->|REST API| BE
+    BE -->|MyBatis| DB
+    FE -->|SSE| AI_API
+    BE -->|HTTP| AI_API
+    AI_API --> RAG_SVC
+    AI_API --> AGENT_SVC
+    RAG_SVC --> VS
+    AGENT_SVC --> LLM_SVC
+    AGENT_SVC --> RAG_SVC
+    BE <-->|WebSocket| E1
+    BE <-->|WebSocket| E2
+    BE <-->|WebSocket| E3
 ```
 
-### 2.2 核心设计思想
+### 2.2 AI服务架构
 
-1. **测试编写与执行分离**
+```mermaid
+flowchart LR
+    subgraph 输入层["输入层"]
+        USER_REQ["用户需求"]
+        CHAT_MSG["对话消息"]
+        DOC["知识文档"]
+    end
 
-   - **平台端**：负责用例编写、管理、调度、报告展示
-   - **引擎端**：负责测试数据下载、解析、执行、结果回传
-2. **分布式执行架构**
+    subgraph 处理层["处理层"]
+        QUERY_RW["查询改写"]
+        HYBRID["混合检索<br/>向量+BM25"]
+        RERANK["BGE重排序"]
+        WORKFLOW["用例生成工作流"]
+    end
 
-   - 引擎采用**注册制**，可部署在任意环境的任意机器
-   - 突破传统测试工具的执行资源限制
-   - 支持本地调试，实时查看执行过程
-3. **任务实时通信**
+    subgraph 模型层["模型层"]
+        LLM["大语言模型<br/>DeepSeek/Qwen"]
+        EMB["Embedding模型"]
+        BGE["BGE Reranker"]
+    end
 
-   - 平台通过 **WebSocket** 与引擎保持长连接
-   - 利用 **ConcurrentHashMap** 管理引擎会话状态
-   - 心跳机制检测引擎在线状态
-4. **定时任务调度**
+    subgraph 输出层["输出层"]
+        ANSWER["智能回答"]
+        CASE["测试用例"]
+        CONTEXT["检索上下文"]
+    end
 
-   - 基于 **Spring Task** 实现测试计划定时执行
-   - 支持 Cron 表达式灵活配置执行时间
+    USER_REQ --> WORKFLOW
+    CHAT_MSG --> QUERY_RW
+    DOC --> HYBRID
+    QUERY_RW --> HYBRID
+    HYBRID --> RERANK
+    RERANK --> CONTEXT
+    CONTEXT --> LLM
+    WORKFLOW --> LLM
+    LLM --> ANSWER
+    LLM --> CASE
+```
+
+### 2.3 测试执行引擎架构
+
+```mermaid
+flowchart TD
+    subgraph 触发层["任务触发层"]
+        WS["WebSocket通知"]
+        TASK["任务数据"]
+    end
+
+    subgraph 解析层["任务解析层"]
+        SETTING["setting.py<br/>任务解析"]
+        PLAN["执行计划生成"]
+    end
+
+    subgraph 执行层["测试执行层"]
+        RUN["run.py<br/>执行调度"]
+        PYTEST["pytest.main"]
+        COLLECT["json_collector.py<br/>JSON收集器"]
+        HOOKS["pytest_hooks.py<br/>钩子函数"]
+    end
+
+    subgraph 核心层["核心逻辑层"]
+        TESTCASE["core/api/testcase.py<br/>ApiTestCase"]
+        STEP["core/api/teststep.py<br/>步骤执行"]
+        TEMPLATE["core/template.py<br/>模板渲染"]
+    end
+
+    subgraph 报告层["报告输出层"]
+        PLATFORM["平台推送<br/>queue.put"]
+        ALLURE["Allure报告<br/>旁路观察者"]
+    end
+
+    WS --> TASK
+    TASK --> SETTING
+    SETTING --> PLAN
+    PLAN --> RUN
+    RUN --> PYTEST
+    PYTEST --> COLLECT
+    COLLECT --> TESTCASE
+    TESTCASE --> STEP
+    TESTCASE --> TEMPLATE
+    STEP --> HOOKS
+    HOOKS --> PLATFORM
+    HOOKS --> ALLURE
+```
 
 ---
 
@@ -121,101 +230,175 @@ flowchart TD
 ```
 TestPlatform/
 ├── platform-backend/          # 后端服务 (SpringBoot)
-│   ├── src/
-│   │   └── main/
-│   │       ├── java/com/autotest/
-│   │       │   ├── controller/   # 控制器层
-│   │       │   ├── service/      # 业务服务层
-│   │       │   ├── mapper/       # 数据访问层
-│   │       │   ├── domain/       # 实体类
-│   │       │   ├── dto/          # 数据传输对象
-│   │       │   ├── job/          # 定时任务
-│   │       │   ├── websocket/    # WebSocket配置
-│   │       │   └── common/        # 公共组件
-│   │       └── resources/
-│   │           ├── mapper/        # MyBatis XML
-│   │           └── application.yml
-│   ├── assets/                   # 后端说明文档
-│   └── pom.xml                   # Maven 配置
+│   ├── src/main/java/com/autotest/
+│   │   ├── controller/        # 控制器层 (含AiController)
+│   │   ├── service/           # 业务服务层
+│   │   ├── service/ai/        # AI相关服务
+│   │   ├── mapper/            # 数据访问层
+│   │   ├── domain/            # 实体类
+│   │   ├── websocket/         # WebSocket配置
+│   │   └── common/            # 公共组件
+│   ├── src/main/resources/
+│   │   └── mapper/            # MyBatis XML
+│   └── pom.xml
 │
-├── platform-frontend/        # 前端应用 (Vue)
+├── platform-frontend/         # 前端应用 (Vue)
 │   ├── src/
-│   │   ├── views/            # 页面视图
-│   │   │   ├── caseCenter/   # 用例中心
-│   │   │   ├── envCenter/    # 环境中心
-│   │   │   ├── planCenter/   # 计划中心
-│   │   │   ├── report/       # 测试报告
-│   │   │   └── system/       # 系统管理
-│   │   ├── router/           # 路由配置
-│   │   ├── vuex/             # 状态管理
-│   │   └── utils/            # 工具函数
-│   ├── assets/               # 前端说明文档
+│   │   ├── views/
+│   │   │   ├── caseCenter/    # 用例中心
+│   │   │   ├── aiAssistant/   # AI助手模块
+│   │   │   │   ├── components/
+│   │   │   │   │   ├── AssistantChatPanel.vue
+│   │   │   │   │   └── AssistantSidebar.vue
+│   │   │   │   ├── utils/
+│   │   │   │   │   └── sse.js
+│   │   │   │   └── index.vue
+│   │   │   ├── planCenter/    # 计划中心
+│   │   │   └── report/        # 测试报告
+│   │   ├── router/            # 路由配置
+│   │   └── vuex/              # 状态管理
 │   └── package.json
 │
-├── TestEngin/              # 测试执行引擎 (Python)
-│   ├── app/                 # 应用入口
-│   ├── core/                # 核心执行器
-│   │   ├── api/            # API测试执行器
-│   │   ├── web/            # Web测试执行器
-│   │   └── app/            # App测试执行器
-│   ├── tools/               # 工具模块
-│   ├── config/              # 配置文件
-│   ├── assets/              # 引擎说明文档
+├── ai-service/                # AI智能服务 (FastAPI)
+│   ├── app/
+│   │   ├── main.py            # FastAPI入口
+│   │   ├── config.py          # 配置管理
+│   │   ├── routers/
+│   │   │   ├── chat.py        # AI对话路由 (SSE)
+│   │   │   ├── knowledge.py   # RAG知识库路由
+│   │   │   └── agent.py       # 用例生成路由
+│   │   ├── services/
+│   │   │   ├── agent_service.py   # Agent核心服务
+│   │   │   ├── llm_service.py     # LLM服务
+│   │   │   ├── rag_service.py     # RAG检索服务
+│   │   │   ├── case_workflow.py   # 用例生成工作流
+│   │   │   └── retrieval/
+│   │   │       ├── bm25.py        # BM25关键词检索
+│   │   │       ├── query_rewrite.py  # 查询改写
+│   │   │       └── reranker.py    # BGE重排序
+│   │   ├── tools/
+│   │   │   └── platform_tools.py  # 平台API客户端
+│   │   ├── utils/
+│   │   │   └── markdown_parent_child_chunking.py  # Markdown分块
+│   │   └── prompts/
+│   │       └── assistant_prompts.py
+│   ├── config.yaml            # 配置文件
 │   └── requirements.txt
 │
-├── assets/                 # 项目级说明文档
-│   └── project说明文档/
-│       ├── 快速入门.md
-│       ├── 产品手册.md
-│       └── 部署文档.md
+├── TestEngin/                 # 测试执行引擎 (Python)
+│   ├── app/
+│   │   ├── start.py           # 引擎启动入口
+│   │   ├── run.py             # 执行入口 (Pytest/Unittest双模式)
+│   │   ├── json_collector.py  # Pytest JSON收集器
+│   │   ├── pytest_hooks.py    # Pytest钩子函数
+│   │   ├── ws.py              # WebSocket通信
+│   │   └── setting.py         # 任务解析
+│   ├── core/
+│   │   └── api/
+│   │       ├── testcase.py    # ApiTestCase核心执行
+│   │       ├── teststep.py    # 步骤执行器
+│   │       └── collector.py   # 数据收集器
+│   └── config/
+│       └── config.ini         # 引擎配置
 │
-└── README.md               # 项目主文档
+└── README.md                  # 项目主文档
 ```
 
 ---
 
 ## 四、核心模块说明
 
-### 4.1 后端服务 (platform-backend)
+### 4.1 AI服务模块 ([ai-service/README.md](./ai-service/README.md))
 
-| 模块               | 职责                               |
-| ------------------ | ---------------------------------- |
-| **用户认证** | JWT Token 生成与验证，登录拦截器   |
-| **项目管理** | 多项目数据隔离，RBAC 权限控制      |
-| **环境配置** | 测试环境管理，域名配置，数据库连接 |
-| **用例管理** | API/Web/App 用例 CRUD，步骤管理    |
-| **接口管理** | 接口文档维护，Swagger 导入         |
-| **计划调度** | 测试计划定时执行，Cron 表达式      |
-| **任务执行** | 任务触发，引擎通知，设备占用       |
-| **报告管理** | 测试报告生成，统计展示             |
-| **引擎管理** | 引擎注册，心跳检测，状态监控       |
-| **设备管理** | 移动设备在线控制，投屏操作         |
+AI服务是独立的FastAPI服务，为平台提供智能能力：
 
-### 4.2 前端应用 (platform-frontend)
+| 功能 | 说明 |
+|------|------|
+| **AI对话** | SSE流式对话，支持RAG知识库增强 |
+| **知识库管理** | Markdown文档切片、向量索引、检索 |
+| **用例生成** | ReAct Agent自动选择接口并生成测试用例 |
 
-| 模块               | 功能                       |
-| ------------------ | -------------------------- |
-| **用例中心** | API/Web/App 用例可视化编辑 |
-| **环境中心** | 环境、引擎、设备管理       |
-| **计划中心** | 测试集合、测试计划配置     |
-| **测试报告** | 执行结果查看，详情分析     |
-| **系统管理** | 用户、角色、项目管理       |
+**RAG检索流程：**
+```
+查询输入 → 查询改写与扩写 → 并行向量检索+关键词检索 → RRF融合 → BGE重排序 → 返回Top-K
+```
 
-### 4.3 测试引擎 (TestEngin)
+**用例生成流程：**
+```
+需求输入 → 改写用户需求 → 加载项目接口池 → 选择候选接口 → 获取接口详情 → RAG增强 → LLM生成 → Pydantic校验 → 返回用例
+```
 
-| 组件               | 说明                         |
-| ------------------ | ---------------------------- |
-| **任务拉取** | 从平台下载测试数据压缩包     |
-| **数据解析** | 解压并解析 JSON 格式测试数据 |
-| **用例执行** | 按测试类型执行对应测试       |
-| **结果回传** | 实时上传执行结果和截图日志   |
-| **心跳保活** | 定时向平台发送心跳维持连接   |
+### 4.2 测试执行引擎 ([TestEngin/README.md](./TestEngin/README.md))
+
+分布式测试执行引擎，支持多进程并发执行：
+
+| 组件 | 说明 |
+|------|------|
+| **任务调度** | WebSocket接收任务，多进程执行 |
+| **Pytest执行** | 自定义JSON收集器，复用ApiTestCase |
+| **双通道报告** | 平台推送(核心) + Allure报告(可选) |
+| **钩子机制** | pytest_runtest_makereport收集结果 |
+
+**执行模式：**
+- API测试：使用Pytest执行，支持插件扩展
+- 结果回传：通过queue实时推送至平台
+
+### 4.3 后端服务 ([platform-backend/README.md](./platform-backend/README.md))
+
+SpringBoot后端服务，提供RESTful API：
+
+| 模块 | 职责 |
+|------|------|
+| **AiController** | AI服务代理，SSE流式转发 |
+| **RunService** | 任务触发、引擎通知 |
+| **EngineService** | 引擎注册、心跳检测 |
+| **WebSocket** | 与引擎实时通信 |
+
+### 4.4 前端应用 ([platform-frontend/README.md](./platform-frontend/README.md))
+
+Vue 2.7前端应用，提供可视化操作界面：
+
+| 模块 | 功能 |
+|------|------|
+| **AI助手** | 智能对话、知识库管理、用例生成 |
+| **用例中心** | API用例可视化编辑 |
+| **计划中心** | 测试计划配置、定时任务 |
+| **测试报告** | 执行结果查看、详情分析 |
 
 ---
 
 ## 五、核心流程
 
-### 5.1 测试执行流程
+### 5.1 AI对话流程
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant F as 前端
+    participant B as 后端
+    participant AI as AI服务
+    participant RAG as RAG检索
+    participant LLM as 大模型
+
+    U->>F: 输入问题
+    F->>B: POST /ai/chat/stream
+    B->>AI: 转发SSE请求
+    AI->>AI: 识别用例需求
+    alt 用例生成需求
+        AI->>AI: 执行用例生成工作流
+        AI->>B: SSE: {type: "case", case: {...}}
+    else 问答需求
+        AI->>RAG: 混合检索
+        RAG-->>AI: 检索结果
+        AI->>LLM: 流式生成回答
+        LLM-->>AI: 文本片段
+        AI->>B: SSE: {type: "content", delta: "..."}
+    end
+    B->>F: SSE流式转发
+    F->>U: 实时展示回答
+```
+
+### 5.2 测试执行流程
 
 ```mermaid
 sequenceDiagram
@@ -223,31 +406,53 @@ sequenceDiagram
     participant F as 前端
     participant B as 后端
     participant E as 测试引擎
+    participant P as Pytest
 
-    U->>F: 选择用例/集合/计划
+    U->>F: 选择用例执行
     F->>B: 发起执行请求
-    B->>B: 创建任务Task和报告Report
-    B->>E: WebSocket通知引擎
+    B->>B: 创建任务Task
+    B->>E: WebSocket通知
     E->>E: 下载测试数据
-    E->>E: 解析并执行测试
+    E->>P: pytest.main()
+    P->>P: json_collector收集
+    P->>P: ApiTestCase.execute
+    P->>P: pytest_hooks收集结果
+    P->>E: 结果入队
     E->>B: 回传执行结果
     B->>B: 更新报告状态
     B->>F: 推送执行进度
-    F->>U: 实时展示执行状态
+    F->>U: 实时展示状态
 ```
 
-### 5.2 引擎注册流程
+### 5.3 RAG知识库索引流程
 
 ```mermaid
 flowchart LR
-    A[启动引擎] --> B[加载配置]
-    B --> C[连接后端注册]
-    C --> D{验证成功?}
-    D -->|是| E[引擎在线]
-    D -->|否| F[重试连接]
-    F --> C
-    E --> G[心跳保活]
-    G --> H[等待任务]
+    A[文档输入] --> B[Markdown父子分块]
+    B --> C[Embedding向量化]
+    C --> D[Chroma向量库存储]
+    D --> E[元数据标记<br/>project_id/doc_id]
+```
+
+### 5.4 用例生成Agent流程
+
+```mermaid
+flowchart TD
+    A[用户需求] --> B[改写需求]
+    B --> C[加载项目接口池]
+    C --> D[LLM选择接口]
+    D -->|失败| E[关键词回退]
+    D --> F[获取接口详情]
+    E --> F
+    F --> G[构建依赖关系]
+    G --> H[RAG检索增强]
+    H --> I[组装Prompt]
+    I --> J[LLM生成JSON]
+    J --> K[Pydantic校验]
+    K -->|失败| L[重试机制]
+    L --> J
+    K --> M[标准化用例]
+    M --> N[返回结果]
 ```
 
 ---
@@ -256,129 +461,133 @@ flowchart LR
 
 ### 6.1 环境要求
 
-| 环境    | 要求                 |
-| ------- | -------------------- |
-| JDK     | 1.8+                 |
-| MySQL   | 5.7+                 |
-| Node.js | 14+                  |
-| Python  | 3.8+                 |
-| Chrome  | 最新版（Web 测试用） |
+| 环境 | 要求 |
+|------|------|
+| JDK | 1.8+ |
+| MySQL | 5.7+ |
+| Node.js | 14+ |
+| Python | 3.8+ |
 
 ### 6.2 启动步骤
 
 **1. 初始化数据库**
-
-```bash
-# 创建数据库
+```sql
 CREATE DATABASE liuma DEFAULT CHARACTER SET utf8mb4;
-
-# 项目使用 Flyway 自动迁移
 ```
 
 **2. 启动后端服务**
-
 ```bash
 cd platform-backend
-
-# 编译打包
 mvn clean package -DskipTests
-
-# 启动服务
 java -jar target/AutoTest-1.4.1.jar
 ```
 
 **3. 启动前端服务**
-
 ```bash
 cd platform-frontend
-
-# 安装依赖
 npm install
-
-# 启动开发服务
 npm run dev
 ```
 
-**4. 启动测试引擎**
+**4. 启动AI服务**
+```bash
+cd ai-service
+pip install -r requirements.txt
+python -m uvicorn app.main:app --reload --port 8001
+```
 
+**5. 启动测试引擎**
 ```bash
 cd TestEngin
-
-# 安装 Python 依赖
 pip3 install -r requirements.txt
-
-# 配置引擎参数（config/config.ini）
-
-# 启动引擎
 python3 startup.py
 ```
 
 ### 6.3 访问平台
 
 - **本地访问**：http://localhost:5173
+- **AI服务文档**：http://localhost:8001/docs
 - **默认账号**：13357709264 / 123456
 
 ---
 
-## 七、二次开发指南
+## 七、核心亮点
 
-### 7.1 添加新功能
+### 7.1 AI服务亮点
 
-1. **后端开发**
+1. **混合检索策略**
+   - 向量检索 + BM25关键词检索并行执行
+   - RRF融合算法综合排序
+   - BGE重排序精排优化
 
-   - 定义实体：`platform-backend/src/main/java/com/autotest/domain/`
-   - 创建 Mapper：`platform-backend/src/main/java/com/autotest/mapper/`
-   - 编写 Service：`platform-backend/src/main/java/com/autotest/service/`
-   - 创建 Controller：`platform-backend/src/main/java/com/autotest/controller/`
-2. **前端开发**
+2. **父文档检索策略**
+   - Markdown父子分块，保持文档结构
+   - 子块匹配，父块召回，提高上下文完整性
 
-   - 创建页面：`platform-frontend/src/views/`
-   - 配置路由：`platform-frontend/src/router/index.js`
-   - 封装 API：`platform-frontend/src/utils/`
-3. **引擎扩展**
+3. **用例生成工作流**
+   - 固定工作流 + ReAct接口选择
+   - Pydantic校验 + 失败重试机制
+   - 接口依赖关系自动分析
 
-   - 自定义函数：`TestEngin/tools/funclib/provider/`
-   - 添加断言：`TestEngin/core/assertion.py`
+4. **多模型支持**
+   - 支持DeepSeek、Qwen、OpenAI等多种LLM
+   - 支持Ollama本地Embedding
+   - 降级策略保证服务可用性
 
-### 7.2 项目文档
+### 7.2 测试引擎亮点
 
-| 文档路径                                  | 说明             |
-| ----------------------------------------- | ---------------- |
-| [后端 README](./platform-backend/README.md)  | 后端服务详细说明 |
-| [前端 README](./platform-frontend/README.md) | 前端应用详细说明 |
-| [引擎 README](./TestEngin/README.md)         | 测试引擎详细说明 |
-| [assets/README](./assets/README.md)          | 项目文档索引     |
+1. **Pytest重构**
+   - 自定义JSON收集器识别平台测试文件
+   - 复用原有ApiTestCase执行逻辑
+   - 支持pytest插件生态
+
+2. **双通道报告**
+   - 旁路观察者模式，0业务侵入
+   - 平台推送(核心功能) + Allure报告(可选)
+   - 通过stash传递trans_list数据
+
+3. **多进程架构**
+   - 任务执行、结果上报、图片上传分离
+   - WebSocket实时通信
+   - 心跳保活机制
+
+### 7.3 架构亮点
+
+1. **服务解耦**
+   - AI服务独立部署，通过HTTP通信
+   - 引擎注册制，支持水平扩展
+   - 项目级数据隔离
+
+2. **LangSmith观测**
+   - 全链路追踪
+   - 调用链可视化
+   - 性能监控
 
 ---
 
-## 八、相关资源
+## 八、相关文档
 
-### 8.1 在线资源
-
-| 资源     | 地址                                        |
-| -------- | ------------------------------------------- |
-| 演示平台 | http://demo-ee.liumatest.cn                 |
-| 官网地址 | http://www.liumatest.cn                     |
-| 社区论坛 | http://community.liumatest.cn               |
-| 快速入门 | http://www.liumatest.cn/briefDoc/           |
-| 产品手册 | http://www.liumatest.cn/productDoc/         |
-| B站教程  | https://www.bilibili.com/cheese/play/ss7009 |
-
-### 8.2 项目地址
-
-- **GitHub**：https://github.com/Chras-fu/Liuma-platform （平台端）
-- **GitHub**：https://github.com/Chras-fu/Liuma-engine （引擎端）
+| 文档 | 路径 |
+|------|------|
+| AI服务文档 | [ai-service/README.md](./ai-service/README.md) |
+| 测试引擎文档 | [TestEngin/README.md](./TestEngin/README.md) |
+| 后端服务文档 | [platform-backend/README.md](./platform-backend/README.md) |
+| 前端服务文档 | [platform-frontend/README.md](./platform-frontend/README.md) |
 
 ---
 
 ## 九、版本信息
 
 - **当前版本**：1.4.1
-- **项目作者**：Chras-fu
 - **开源协议**：AGPL
 
 ---
 
 ## 十、致谢
 
-感谢流马开源项目团队提供的优秀自动化测试平台，本项目基于流马开源版本进行学习和二次开发，仅供学习交流使用。
+感谢开源社区提供的优秀工具和框架，本项目基于以下技术构建：
+- LangChain - LLM应用开发框架
+- Pytest - Python测试框架
+- FastAPI - 高性能Web框架
+- SpringBoot - Java后端框架
+- Vue - 前端框架

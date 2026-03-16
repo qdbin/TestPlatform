@@ -6,14 +6,16 @@
 .idea/
 .trae/
 .vscode/
-target/
+**/target/
+
+data/
 *.iws
 *.iml
 *.ipr
 data
-assets/
+# assets/
 TestEngin/
 个人简历（260126）.md
-.agents
-skills-lock.json
-
+**/.pytest_cache
+.todo/
+.personal/

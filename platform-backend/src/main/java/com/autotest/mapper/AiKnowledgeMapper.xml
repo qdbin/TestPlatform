@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.autotest.mapper.AiKnowledgeMapper">
+
+    <insert id="addKnowledge" parameterType="com.autotest.domain.AiKnowledge">
+        INSERT INTO ai_knowledge (id, project_id, parent_id, name, content, doc_type, source_type, status, create_time, update_time, create_user, update_user)
+        VALUES (#{id}, #{projectId}, #{parentId}, #{name}, #{content}, #{docType}, #{sourceType}, #{status}, #{createTime}, #{updateTime}, #{createUser}, #{updateUser})
+    </insert>
+
+    <update id="updateKnowledge" parameterType="com.autotest.domain.AiKnowledge">
+        UPDATE ai_knowledge
+        SET parent_id = #{parentId}, name = #{name}, content = #{content}, doc_type = #{docType}, source_type = #{sourceType},
+        <if test="status != null and status != ''">status = #{status},</if>
+        update_time = #{updateTime}, update_user = #{updateUser}
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteKnowledge" parameterType="string">
+        UPDATE ai_knowledge SET status = 'deleted', update_time = UNIX_TIMESTAMP()*1000 WHERE id = #{id}
+    </delete>
+
+    <select id="getKnowledgeById" resultType="com.autotest.domain.AiKnowledge">
+        SELECT id, project_id as projectId, parent_id as parentId, name, content, doc_type as docType, source_type as sourceType, status, create_time as createTime, update_time as updateTime, create_user as createUser, update_user as updateUser
+        FROM ai_knowledge WHERE id = #{id} AND status != 'deleted'
+    </select>
+
+    <select id="getKnowledgeList" resultType="com.autotest.domain.AiKnowledge">
+        SELECT id, project_id as projectId, parent_id as parentId, name, content, doc_type as docType, source_type as sourceType, status, create_time as createTime, update_time as updateTime, create_user as createUser, update_user as updateUser
+        FROM ai_knowledge WHERE project_id = #{projectId} AND status != 'deleted' ORDER BY create_time DESC
+    </select>
+
+    <select id="getKnowledgeListByType" resultType="com.autotest.domain.AiKnowledge">
+        SELECT id, project_id as projectId, parent_id as parentId, name, content, doc_type as docType, source_type as sourceType, status, create_time as createTime, update_time as updateTime, create_user as createUser, update_user as updateUser
+        FROM ai_knowledge WHERE project_id = #{projectId} AND doc_type = #{docType} AND status != 'deleted' ORDER BY create_time DESC
+    </select>
+
+    <select id="countChildren" resultType="java.lang.Integer">
+        SELECT COUNT(1) FROM ai_knowledge
+        WHERE project_id = #{projectId} AND parent_id = #{parentId} AND status != 'deleted'
+    </select>
+
+</mapper>

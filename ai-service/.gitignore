@@ -1,0 +1,31 @@
+.idea/
+
+# Python
+**/__pycache__/
+**/.pytest_cache/
+*.pyc
+*.pyo
+*.pyd
+venv/
+env
+.idea
+**/log/
+**/logs/
+Dockerfile
+.trae/
+.vscode/
+target/
+*.iws
+*.iml
+*.ipr
+data
+**/chromedriver.exe
+*.log
+chroma_data
+
+logs/
+.langgraph_api
+
+# file
+.env
+config.yaml

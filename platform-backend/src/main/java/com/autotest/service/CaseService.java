@@ -65,7 +65,7 @@ public class CaseService {
         Case testCase = caseObject.toJavaObject(Case.class);
 
         // 新增用例 || 更新用例
-        if(testCase.getId().equals("") || testCase.getId() == null){ // 新增用例
+        if(testCase.getId() == null || testCase.getId().equals("")){ // 新增用例
             testCase.setId(UUID.randomUUID().toString());           // 生成主键
             testCase.setCreateTime(System.currentTimeMillis());     // 记录创建时间
             testCase.setUpdateTime(System.currentTimeMillis());     // 记录更新时间
@@ -78,7 +78,7 @@ public class CaseService {
         }
 
         // 新增API用例（按类型处理步骤，先清空旧步骤后批量新增）
-        if(caseRequest.getType().equals("API")){
+        if("API".equalsIgnoreCase(caseRequest.getType())){
             // 先删除该用例相关的所有api接口（更加caseId删除所有的case_api）
             caseApiMapper.deleteCaseApi(testCase.getId());
             // 遍历对应用例的所有api接口，把json对象转为java对象
@@ -96,7 +96,7 @@ public class CaseService {
         }
 
         // 新增web操作步骤
-        else if (caseRequest.getType().equals("WEB")){ 
+        else if ("WEB".equalsIgnoreCase(caseRequest.getType())){ 
             caseWebMapper.deleteCaseWeb(testCase.getId());  // 先删除全部用例接口
             List<CaseWebRequest> caseWebArray = caseRequest.getCaseWebs();
             List<CaseWeb> caseWebs = new ArrayList<>();

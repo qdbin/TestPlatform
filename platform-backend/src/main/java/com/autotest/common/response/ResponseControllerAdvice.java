@@ -12,6 +12,9 @@ import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 /**
  * 统一响应包装
@@ -29,6 +32,12 @@ public class ResponseControllerAdvice implements ResponseBodyAdvice<Object> {
      */
     @Override
     public boolean supports(MethodParameter returnType, Class<? extends HttpMessageConverter<?>> aClass) {
+        Class<?> parameterType = returnType.getParameterType();
+        if (SseEmitter.class.isAssignableFrom(parameterType)
+                || ResponseBodyEmitter.class.isAssignableFrom(parameterType)
+                || StreamingResponseBody.class.isAssignableFrom(parameterType)) {
+            return false;
+        }
         // 二进制（字节数组）响应直接透传，不做统一包装
         return !aClass.equals(ByteArrayHttpMessageConverter.class);
     }

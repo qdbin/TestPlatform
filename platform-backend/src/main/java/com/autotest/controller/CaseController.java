@@ -7,6 +7,7 @@ import com.autotest.dto.CaseDTO;
 import com.autotest.request.ApiParamRuleRequest;
 import com.autotest.request.CaseRequest;
 import com.autotest.request.QueryRequest;
+import com.autotest.service.AiService;
 import com.autotest.service.CaseGenerateService;
 import com.autotest.service.CaseService;
 import com.autotest.service.ReportService;
@@ -38,6 +39,9 @@ public class CaseController {
     @Resource
     private CaseGenerateService caseGenerateService;
 
+    @Resource
+    private AiService aiService;
+
     /**
      * 保存用例
      * 
@@ -49,6 +53,9 @@ public class CaseController {
     public void saveCase(@RequestBody CaseRequest caseRequest, HttpServletRequest request) {
         String user = request.getSession().getAttribute("userId").toString();
         caseRequest.setUpdateUser(user);
+        if ("API".equalsIgnoreCase(caseRequest.getType())) {
+            aiService.validateCaseApiIds(caseRequest.getProjectId(), caseRequest);
+        }
         caseService.saveCase(caseRequest);
     }
 

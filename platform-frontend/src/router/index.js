@@ -88,12 +88,8 @@ const projectManage= () => import('@/views/system/project');
 const RoleManage= () => import('@/views/system/role');
 // 用户管理
 const userManage= () => import('@/views/system/user');
-
-/**
- * 临时测试组件-可删
- */
-const TmpTest = () => import('@/views/tmp/tmp');
-
+// AI助手
+const AIAssistant= () => import('@/views/aiAssistant/index');
 
 // 启用路由功能
 Vue.use(Router);
@@ -445,6 +441,14 @@ export default new Router({
             component: userManage,
             meta: {
                 requirePerm: "USER_MENU",
+                requireAuth: true
+            }
+        },{
+            path: '/aiAssistant',
+            name: 'AI助手',
+            component: AIAssistant,
+            meta: {
+                requirePerm: "NORMAL_MENU",
                 requireAuth: true
             }
         }]
