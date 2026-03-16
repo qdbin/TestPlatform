@@ -131,6 +131,7 @@ async def query_knowledge(request: RagQueryRequestModel):
             query=request.question,
             top_k=request.top_k,
             user_id=request.user_id or "",
+            messages=[item.model_dump() for item in request.messages] if request.messages else [],
         )
         results = search_result.get("data", [])
 

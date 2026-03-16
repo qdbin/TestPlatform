@@ -37,6 +37,7 @@ class MessageItem(BaseModel):
         {"role": "user", "content": "你好"}
         {"role": "assistant", "content": "您好！有什么可以帮助您的？"}
     """
+
     role: str
     content: str
 
@@ -52,14 +53,8 @@ class ChatRequestModel(BaseModel):
             "use_rag": true,
             "messages": [{"role": "user", "content": "你好"}]
         }
-
-    字段说明：
-        - project_id: 项目ID（必填，用于数据隔离）
-        - user_id: 用户ID（可选）
-        - message: 用户消息（必填）
-        - use_rag: 是否启用RAG检索（默认true）
-        - messages: 历史消息列表（可选）
     """
+
     project_id: str
     user_id: Optional[str] = ""
     message: str
@@ -71,23 +66,17 @@ class RagAddRequestModel(BaseModel):
     """
     RAG知识库文档添加请求模型
 
-    字段说明：
-        - project_id: 项目ID（隔离主键）
-        - user_id: 用户ID（可选）
-        - doc_id: 文档ID（用于重建索引）
-        - doc_type: 文档类型（manual/api_doc等）
-        - doc_name: 文档名（用于关键词召回）
-        - content: 文档内容（Markdown格式）
-
     请求示例：
         {
             "project_id": "test-project",
+            "user_id": "user-001",
             "doc_id": "doc-001",
             "doc_type": "manual",
             "doc_name": "登录接口文档",
             "content": "# 登录接口\\n\\n## 请求参数\\n..."
         }
     """
+
     project_id: str
     user_id: Optional[str] = ""
     doc_id: str
@@ -100,13 +89,6 @@ class RagQueryRequestModel(BaseModel):
     """
     RAG知识库检索请求模型
 
-    字段说明：
-        - project_id: 项目ID（必填）
-        - user_id: 用户ID（可选）
-        - question: 查询问题（必填）
-        - top_k: 返回结果数量（默认5）
-        - messages: 历史消息（可选）
-
     请求示例：
         {
             "project_id": "test-project",
@@ -114,6 +96,7 @@ class RagQueryRequestModel(BaseModel):
             "top_k": 3
         }
     """
+
     project_id: str
     user_id: Optional[str] = ""
     question: str
@@ -135,6 +118,7 @@ class RagDeleteRequestModel(BaseModel):
             "doc_id": "doc-001"
         }
     """
+
     project_id: str
     doc_id: str
 
@@ -158,6 +142,7 @@ class GenerateCaseRequestModel(BaseModel):
             "messages": []
         }
     """
+
     project_id: str
     user_id: Optional[str] = ""
     user_requirement: str
@@ -179,6 +164,7 @@ class ApiSelectionResult(BaseModel):
             "reason": "登录接口和注册接口是用户登录流程的核心接口"
         }
     """
+
     api_ids: List[str] = Field(default_factory=list)
     reason: str = ""
 
@@ -209,6 +195,7 @@ class CaseApiStepModel(BaseModel):
             "file": []
         }
     """
+
     model_config = ConfigDict(extra="forbid")  # 禁止额外字段，确保数据严格
     id: str = ""
     index: int = 0
@@ -262,6 +249,7 @@ class CaseRequestModel(BaseModel):
             "caseApis": [...]
         }
     """
+
     model_config = ConfigDict(extra="forbid")  # 禁止额外字段
     id: str = ""
     num: int = 0

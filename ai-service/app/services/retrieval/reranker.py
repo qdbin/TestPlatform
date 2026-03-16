@@ -25,6 +25,7 @@ from typing import List, Dict, Any, Optional
 import os
 
 from app.observability import app_logger
+from app.observability.traceable import traceable
 
 
 class BGEReranker:
@@ -90,6 +91,7 @@ class BGEReranker:
             app_logger.error(self._load_error)
             return False
 
+    @traceable(name="rag_rerank", run_type="retriever")
     def rerank(
         self,
         query: str,

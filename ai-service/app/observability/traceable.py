@@ -21,6 +21,7 @@ LangSmith追踪装饰器模块
     - embedding: Embedding调用
 """
 
+import inspect
 from functools import wraps
 from typing import Any, Callable, Optional
 
@@ -53,24 +54,62 @@ def traceable(
         def search(query: str):
             return results
     """
+    def _safe_value(value: Any) -> Any:
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        if inspect.iscoroutine(value):
+            return "<coroutine>"
+        if isinstance(value, (list, tuple)):
+            return [_safe_value(item) for item in value[:20]]
+        if isinstance(value, dict):
+            safe_dict = {}
+            for idx, (k, v) in enumerate(value.items()):
+                if idx >= 50:
+                    break
+                safe_dict[str(k)] = _safe_value(v)
+            return safe_dict
+        return repr(value)[:500]
+
+    def _build_inputs(args: Any, kwargs: Any) -> dict:
+        inputs = {}
+        if args:
+            inputs["args"] = _safe_value(args)
+        if kwargs:
+            inputs["kwargs"] = _safe_value(kwargs)
+        return inputs
+
     def decorator(func: Callable) -> Callable:
+        if inspect.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                if not config.langsmith_tracing:
+                    return await func(*args, **kwargs)
+                trace_name = name or func.__name__
+                inputs = _build_inputs(args, kwargs)
+                with trace(
+                    name=trace_name,
+                    run_type=run_type,
+                    inputs=inputs,
+                    tags=tags or [],
+                ) as run:
+                    try:
+                        result = await func(*args, **kwargs)
+                        if run:
+                            run.outputs = {"result": _safe_value(result)}
+                        return result
+                    except Exception as e:
+                        if run:
+                            run.error = str(e)
+                        raise
+
+            return async_wrapper
+
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # 如果未启用追踪，直接执行
             if not config.langsmith_tracing:
                 return func(*args, **kwargs)
-
-            # 构建追踪名称
             trace_name = name or func.__name__
-
-            # 构建输入参数
-            inputs = {}
-            if args:
-                inputs["args"] = args
-            if kwargs:
-                inputs["kwargs"] = kwargs
-
-            # 使用LangSmith trace上下文管理器
+            inputs = _build_inputs(args, kwargs)
             with trace(
                 name=trace_name,
                 run_type=run_type,
@@ -79,12 +118,10 @@ def traceable(
             ) as run:
                 try:
                     result = func(*args, **kwargs)
-                    # 记录输出
                     if run:
-                        run.outputs = {"result": result}
+                        run.outputs = {"result": _safe_value(result)}
                     return result
                 except Exception as e:
-                    # 记录异常
                     if run:
                         run.error = str(e)
                     raise

@@ -2,8 +2,6 @@ import asyncio
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import app.services.agent_service as agent_service_module
@@ -19,6 +17,7 @@ def _collect_async_events(stream):
         async for event in stream:
             result.append(event)
         return result
+
     return asyncio.run(_run())
 
 
@@ -41,7 +40,11 @@ def test_is_case_request_negative():
 
 def test_chat_plain_mode(monkeypatch):
     service = AgentService()
-    monkeypatch.setattr(agent_service_module.llm_service, "chat", lambda messages, system_prompt=None: "plain-reply")
+    monkeypatch.setattr(
+        agent_service_module.llm_service,
+        "chat",
+        lambda messages, system_prompt=None: "plain-reply",
+    )
     result = service.chat(
         project_id=TEST_PROJECT_ID,
         token=TEST_TOKEN,
@@ -59,7 +62,11 @@ def test_chat_case_mode(monkeypatch):
         "generate_case",
         lambda project_id, token, user_requirement, selected_apis=None, messages=None, user_id="": {
             "status": "success",
-            "case": {"projectId": project_id, "type": "API", "caseApis": [{"apiId": "a1"}, {"apiId": "a2"}]},
+            "case": {
+                "projectId": project_id,
+                "type": "API",
+                "caseApis": [{"apiId": "a1"}, {"apiId": "a2"}],
+            },
         },
     )
     result = service.chat(
@@ -80,7 +87,9 @@ def test_stream_chat_plain_mode(monkeypatch):
         yield "A"
         yield "B"
 
-    monkeypatch.setattr(agent_service_module.llm_service, "achat_with_stream", fake_stream)
+    monkeypatch.setattr(
+        agent_service_module.llm_service, "achat_with_stream", fake_stream
+    )
     events = _collect_async_events(
         service.stream_chat(
             project_id=TEST_PROJECT_ID,
@@ -101,7 +110,11 @@ def test_stream_chat_case_mode(monkeypatch):
         "generate_case",
         lambda project_id, token, user_requirement, selected_apis=None, messages=None, user_id="": {
             "status": "success",
-            "case": {"projectId": project_id, "type": "API", "caseApis": [{"apiId": "x1"}, {"apiId": "x2"}]},
+            "case": {
+                "projectId": project_id,
+                "type": "API",
+                "caseApis": [{"apiId": "x1"}, {"apiId": "x2"}],
+            },
             "existing_api_ids": ["x1", "x2"],
         },
     )

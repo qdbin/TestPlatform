@@ -109,9 +109,34 @@ class Config:
                 self._config["langsmith"] = {}
             self._config["langsmith"]["tracing"] = os.getenv("LANGSMITH_TRACING")
 
+        # Embedding配置覆盖
+        if os.getenv("EMBEDDING_PROVIDER"):
+            if "embedding" not in self._config:
+                self._config["embedding"] = {}
+            self._config["embedding"]["provider"] = os.getenv("EMBEDDING_PROVIDER")
+
+        if os.getenv("EMBEDDING_OPENAI_API_KEY"):
+            if "embedding" not in self._config:
+                self._config["embedding"] = {}
+            self._config["embedding"]["openai_api_key"] = os.getenv(
+                "EMBEDDING_OPENAI_API_KEY"
+            )
+
+        if os.getenv("EMBEDDING_OPENAI_BASE_URL"):
+            if "embedding" not in self._config:
+                self._config["embedding"] = {}
+            self._config["embedding"]["openai_base_url"] = os.getenv(
+                "EMBEDDING_OPENAI_BASE_URL"
+            )
+
+        if os.getenv("EMBEDDING_OLLAMA_URL"):
+            if "embedding" not in self._config:
+                self._config["embedding"] = {}
+            self._config["embedding"]["ollama_url"] = os.getenv("EMBEDDING_OLLAMA_URL")
+
     def get(self, key: str, default: Any = None) -> Any:
         """
-        获取配置值，支持点号分隔的嵌套键
+        获取`config.ymal`的配置值，支持点号分隔的嵌套键
 
         @param key: 配置键，支持 "llm.provider" 格式
         @param default: 默认值
@@ -165,8 +190,38 @@ class Config:
 
     # ==================== Embedding 配置属性 ====================
     @property
+    def embedding_provider(self) -> str:
+        """Embedding 提供商：ollama / openai"""
+        return self.get("embedding.provider", "ollama")
+
+    @property
+    def embedding_openai_api_key(self) -> str:
+        """OpenAI Embedding API Key"""
+        return self.get("embedding.openai_api_key", "")
+
+    @property
+    def embedding_openai_base_url(self) -> str:
+        """OpenAI Embedding 网关地址"""
+        return self.get("embedding.openai_base_url", "https://api.openai.com/v1")
+
+    @property
+    def embedding_openai_model(self) -> str:
+        """OpenAI Embedding 模型名称"""
+        return self.get("embedding.openai_model", "text-embedding-3-small")
+
+    @property
+    def embedding_ollama_url(self) -> str:
+        """Ollama Embedding 服务地址"""
+        return self.get("embedding.ollama_url", "http://localhost:11434")
+
+    @property
+    def embedding_ollama_model(self) -> str:
+        """Ollama Embedding 模型名称"""
+        return self.get("embedding.ollama_model", "nomic-embed-text")
+
+    @property
     def embedding_model(self) -> str:
-        """Embedding 模型名称"""
+        """Embedding 模型名称（用于重排序等其他用途）"""
         return self.get("embedding.model", "BAAI/bge-small-zh-v1.5")
 
     @property
@@ -280,7 +335,15 @@ if __name__ == "__main__":
     print(f"   - Base URL: {config.llm_base_url}")
 
     print(f"\n2. Embedding 配置:")
-    print(f"   - Model: {config.embedding_model}")
+    print(f"   - Provider: {config.embedding_provider}")
+    print(
+        f"   - OpenAI API Key: {'已设置' if config.embedding_openai_api_key else '未设置'}"
+    )
+    print(f"   - OpenAI Base URL: {config.embedding_openai_base_url}")
+    print(f"   - OpenAI Model: {config.embedding_openai_model}")
+    print(f"   - Ollama URL: {config.embedding_ollama_url}")
+    print(f"   - Ollama Model: {config.embedding_ollama_model}")
+    print(f"   - Model (重排序): {config.embedding_model}")
     print(f"   - Device: {config.embedding_device}")
 
     print(f"\n3. Chroma 向量库配置:")

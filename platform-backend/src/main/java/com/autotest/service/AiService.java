@@ -184,7 +184,6 @@ public class AiService {
     }
 
     // ==================== AI对话和用例生成（转发到FastAPI） ====================
-
     /**
      * 流式对话转发：
      * 读取AI服务SSE事件并原样转发给前端，维持 content/case/error/end 事件协议。
@@ -194,20 +193,34 @@ public class AiService {
                 BufferedReader reader = new BufferedReader(
                         new InputStreamReader(response.body().asInputStream(), StandardCharsets.UTF_8))) {
             String line;
+            StringBuilder eventBuffer = new StringBuilder();
             while ((line = reader.readLine()) != null) {
+                if (line.trim().isEmpty()) {
+                    if (eventBuffer.length() == 0) {
+                        continue;
+                    }
+                    String payload = eventBuffer.toString().trim();
+                    eventBuffer.setLength(0);
+                    if (payload.isEmpty()) {
+                        continue;
+                    }
+                    Map<String, Object> event = objectMapper.readValue(payload,
+                            new TypeReference<Map<String, Object>>() {
+                            });
+                    emitter.send(SseEmitter.event().data(event));
+                    if ("end".equals(String.valueOf(event.get("type")))) {
+                        break;
+                    }
+                    continue;
+                }
                 if (!line.startsWith("data:")) {
                     continue;
                 }
-                String payload = line.replaceFirst("^data:\\s*", "").trim();
-                if (payload.isEmpty()) {
-                    continue;
+                String payloadLine = line.replaceFirst("^data:\\s*", "");
+                if (eventBuffer.length() > 0) {
+                    eventBuffer.append('\n');
                 }
-                Map<String, Object> event = objectMapper.readValue(payload, new TypeReference<Map<String, Object>>() {
-                });
-                emitter.send(SseEmitter.event().data(event));
-                if ("end".equals(String.valueOf(event.get("type")))) {
-                    break;
-                }
+                eventBuffer.append(payloadLine);
             }
             emitter.complete();
         } catch (Exception e) {

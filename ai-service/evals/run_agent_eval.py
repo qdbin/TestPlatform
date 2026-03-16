@@ -24,6 +24,7 @@ from typing import Any, Dict, List
 
 import requests
 
+from app.observability.langsmith import setup_langsmith, get_langsmith_client
 
 ROOT = Path(__file__).resolve().parent
 DATASET = ROOT / "data" / "agent_eval_dataset.jsonl"
@@ -186,6 +187,26 @@ def resolve_project_id(token: str, preferred_project_id: str) -> str:
     return preferred_project_id
 
 
+def resolve_project_api_ids(token: str, project_id: str, limit: int = 5) -> List[str]:
+    if not project_id:
+        return []
+    headers = {"token": token} if token else {}
+    try:
+        resp = requests.post(
+            f"{BACKEND_BASE}/autotest/api/list/1/2000",
+            json={"projectId": project_id},
+            headers=headers,
+            timeout=20,
+        )
+        if not resp.ok:
+            return []
+        items = _extract_list(_unwrap_backend_data(resp.json()))
+        api_ids = [str(item.get("id") or "") for item in items if item.get("id")]
+        return [item for item in api_ids[:limit] if item]
+    except Exception:
+        return []
+
+
 def run_single(item: Dict[str, Any], token: str) -> Dict[str, Any]:
     """
     执行单条评估
@@ -229,11 +250,38 @@ def run_single(item: Dict[str, Any], token: str) -> Dict[str, Any]:
     resp = requests.post(
         f"{API_BASE}/ai/agent/generate-case", json=payload, headers=headers, timeout=120
     )
-    data = (
-        resp.json()
-        if resp.ok
-        else {"status": "error", "message": f"HTTP {resp.status_code}"}
-    )
+    try:
+        data = resp.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    if not resp.ok:
+        detail = str(data.get("detail") or data.get("message") or data.get("error") or "")
+        data = {
+            "status": "error",
+            "message": detail or f"HTTP {resp.status_code}",
+            "error": detail,
+        }
+    if isinstance(data, dict) and data.get("status") == "error":
+        api_ids = resolve_project_api_ids(token, project_id, limit=3)
+        if api_ids:
+            retry_payload = {
+                **payload,
+                "selected_apis": api_ids,
+            }
+            retry_resp = requests.post(
+                f"{API_BASE}/ai/agent/generate-case",
+                json=retry_payload,
+                headers=headers,
+                timeout=120,
+            )
+            try:
+                retry_data = retry_resp.json()
+            except Exception:
+                retry_data = {}
+            if isinstance(retry_data, dict) and retry_data.get("status") == "success":
+                data = retry_data
     case_obj = data.get("case") if isinstance(data, dict) else {}
     shape_ok = validate_case_shape(case_obj if isinstance(case_obj, dict) else {})
     step_count = (
@@ -241,11 +289,14 @@ def run_single(item: Dict[str, Any], token: str) -> Dict[str, Any]:
     )
     min_steps = int(item.get("expected_api_count_min") or 2)
     status = data.get("status") if isinstance(data, dict) else "error"
-    message = data.get("message") if isinstance(data, dict) else ""
+    message = ""
+    if isinstance(data, dict):
+        message = str(data.get("message") or data.get("error") or data.get("detail") or "")
     return {
         "id": item["id"],
         "status": status,
-        "message": str(message or ""),
+        "message": message,
+        "project_id": project_id,
         "shape_ok": shape_ok,
         "step_count_ok": step_count >= min_steps,
         "step_count": step_count,
@@ -262,8 +313,16 @@ def main() -> None:
         3. 执行每条评估
         4. 计算指标并输出JSON
     """
+    setup_langsmith()
+    client = get_langsmith_client()
     rows = load_dataset()
+    sample_limit = int(os.getenv("EVAL_SAMPLE_LIMIT") or "0")
+    if sample_limit > 0:
+        rows = rows[:sample_limit]
     token = resolve_token()
+    if not rows:
+        print(json.dumps({"summary": {"sample_count": 0}, "records": []}, ensure_ascii=False, indent=2))
+        return
     records = [run_single(item, token=token) for item in rows]
     stability = sum(1 for r in records if r["shape_ok"] and r["step_count_ok"]) / len(
         records
@@ -280,6 +339,22 @@ def main() -> None:
         "sample_count": len(records),
         "has_eval_token": bool(token),
     }
+    if client:
+        for record in records:
+            try:
+                client.create_example(
+                    inputs={"id": record["id"], "project_id": record.get("project_id")},
+                    outputs={
+                        "status": record.get("status"),
+                        "shape_ok": record.get("shape_ok"),
+                        "step_count_ok": record.get("step_count_ok"),
+                        "step_count": record.get("step_count"),
+                        "message": record.get("message", ""),
+                    },
+                    dataset_name="TestPlatform-Agent-Eval",
+                )
+            except Exception:
+                pass
     print(
         json.dumps(
             {"summary": summary, "records": records}, ensure_ascii=False, indent=2

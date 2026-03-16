@@ -21,3 +21,11 @@ target/
 data
 **/chromedriver.exe
 *.log
+chroma_data
+
+logs/
+.langgraph_api
+
+# file
+.env
+config.yaml

@@ -21,7 +21,9 @@ RAG检索服务模块 - LangChain 1.x LCEL版本
     5. 返回最终结果
 """
 
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
+import asyncio
+import json
 import time
 import chromadb
 from chromadb.config import Settings
@@ -195,17 +197,13 @@ class RAGService:
             - ollama: 本地Ollama服务
         """
         if self._embedding_func is None and not self._embedding_init_failed:
-            provider = config.get("embedding.provider", "ollama")
+            provider = config.embedding_provider
 
             if provider == "openai":
                 try:
-                    api_key = config.get("embedding.openai_api_key", "")
-                    base_url = config.get(
-                        "embedding.openai_base_url", "https://api.openai.com/v1"
-                    )
-                    model = config.get(
-                        "embedding.openai_model", "text-embedding-3-small"
-                    )
+                    api_key = config.embedding_openai_api_key
+                    base_url = config.embedding_openai_base_url
+                    model = config.embedding_openai_model
                     if not api_key:
                         raise ValueError("未配置OpenAI API Key")
 
@@ -225,12 +223,8 @@ class RAGService:
 
             elif provider == "ollama":
                 try:
-                    ollama_url = config.get(
-                        "embedding.ollama_url", "http://localhost:11434"
-                    )
-                    ollama_model = config.get(
-                        "embedding.ollama_model", "nomic-embed-text"
-                    )
+                    ollama_url = config.embedding_ollama_url
+                    ollama_model = config.embedding_ollama_model
 
                     self._embedding_func = OllamaEmbeddingFunction(
                         ollama_url, ollama_model
@@ -318,6 +312,48 @@ class RAGService:
             return f"文档名：{title}\n\n{body}"
         return body
 
+    def _normalize_metadata_value(self, value: Any) -> Any:
+        if isinstance(value, (str, int, float, bool)):
+            if isinstance(value, str):
+                return value[:1000]
+            return value
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            if not value:
+                return ""
+            return json.dumps(value, ensure_ascii=False)
+        if isinstance(value, dict):
+            if not value:
+                return ""
+            return json.dumps(value, ensure_ascii=False)
+        return str(value)[:1000]
+
+    def _build_metadata(
+        self,
+        project_id: str,
+        doc_id: str,
+        doc_type: str,
+        doc_name: str,
+        user_id: str,
+        timestamp: int,
+        chunk_index: int,
+        extra_meta: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        metadata: Dict[str, Any] = {
+            "project_id": project_id,
+            "doc_id": doc_id,
+            "doc_type": doc_type,
+            "doc_name": doc_name,
+            "user_id": user_id,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "chunk_index": chunk_index,
+        }
+        for key, value in (extra_meta or {}).items():
+            metadata[str(key)] = self._normalize_metadata_value(value)
+        return metadata
+
     @traceable(name="rag_add_document", run_type="retriever")
     def add_document(
         self,
@@ -403,20 +439,21 @@ class RAGService:
 
             # 构建ID和元数据
             ids = [f"{project_id}_{doc_id}_{i}" for i in range(len(normalized_docs))]
-            metadatas = [
-                {
-                    "project_id": project_id,
-                    "doc_id": doc_id,
-                    "doc_type": doc_type,
-                    "doc_name": doc_name,
-                    "user_id": user_id,
-                    "created_at": timestamp,
-                    "updated_at": timestamp,
-                    "chunk_index": i,
-                    **(chunk_metas[i] if i < len(chunk_metas) else {}),
-                }
-                for i in range(len(normalized_docs))
-            ]
+            metadatas = []
+            for i in range(len(normalized_docs)):
+                current_meta = chunk_metas[i] if i < len(chunk_metas) else {}
+                metadatas.append(
+                    self._build_metadata(
+                        project_id=project_id,
+                        doc_id=doc_id,
+                        doc_type=doc_type,
+                        doc_name=doc_name,
+                        user_id=user_id,
+                        timestamp=timestamp,
+                        chunk_index=i,
+                        extra_meta=current_meta,
+                    )
+                )
 
             # 写入向量库
             collection.upsert(
@@ -541,6 +578,7 @@ class RAGService:
             r["source"] = "keyword"
         return results
 
+    @traceable(name="rag_fuse_results", run_type="retriever")
     def _fuse_results(
         self,
         keyword_results: List[Dict[str, Any]],
@@ -602,9 +640,107 @@ class RAGService:
 
         return results
 
+    def _retrieve_for_query(
+        self, project_id: str, current_query: str, top_k: int
+    ) -> Dict[str, Any]:
+        parallel = RunnableParallel(
+            keyword=RunnableLambda(
+                lambda x: self._keyword_search(project_id, x["query"], top_k)
+            ),
+            vector=RunnableLambda(
+                lambda x: self._vector_search(project_id, x["query"], top_k)
+            ),
+        )
+        retrieval = parallel.invoke({"query": current_query})
+        keyword_hits = retrieval.get("keyword") if isinstance(retrieval, dict) else []
+        vector_result = (
+            retrieval.get("vector") if isinstance(retrieval, dict) else ("no_context", [])
+        )
+        status = "no_context"
+        vector_hits: List[Dict[str, Any]] = []
+        if isinstance(vector_result, tuple) and len(vector_result) == 2:
+            status = str(vector_result[0] or "no_context")
+            if isinstance(vector_result[1], list):
+                vector_hits = vector_result[1]
+        return {
+            "query": current_query,
+            "keyword_hits": keyword_hits if isinstance(keyword_hits, list) else [],
+            "vector_status": status,
+            "vector_hits": vector_hits,
+        }
+
+    def _load_parent_chunks(
+        self, project_id: str, parent_ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        if not parent_ids:
+            return {}
+        collection = self._get_or_create_collection()
+        source = self._safe_collection_get(collection, {"project_id": project_id})
+        documents = source.get("documents") or []
+        metadatas = source.get("metadatas") or []
+        parent_map: Dict[str, Dict[str, Any]] = {}
+        for idx, doc in enumerate(documents):
+            metadata = metadatas[idx] if idx < len(metadatas) else {}
+            if not isinstance(metadata, dict):
+                continue
+            role = str(metadata.get("chunk_role") or "")
+            parent_id = str(metadata.get("parent_chunk_id") or "")
+            if role != "parent" or not parent_id or parent_id not in parent_ids:
+                continue
+            parent_map[parent_id] = {
+                "content": str(doc or ""),
+                "metadata": metadata,
+                "source": "parent",
+                "distance": 0.0,
+                "hybrid_score": 0.0,
+                "rerank_score": 0.0,
+            }
+        return parent_map
+
+    @traceable(name="rag_parent_strategy", run_type="retriever")
+    def _apply_parent_document_strategy(
+        self, project_id: str, reranked_results: List[Dict[str, Any]], top_k: int
+    ) -> List[Dict[str, Any]]:
+        if not reranked_results:
+            return []
+        parent_score_map: Dict[str, float] = {}
+        for item in reranked_results:
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            parent_id = str(metadata.get("parent_chunk_id") or "")
+            if not parent_id:
+                continue
+            score = float(item.get("rerank_score") or item.get("hybrid_score") or 0.0)
+            parent_score_map[parent_id] = max(parent_score_map.get(parent_id, 0.0), score)
+        ranked_parent_ids = [
+            entry[0]
+            for entry in sorted(parent_score_map.items(), key=lambda x: x[1], reverse=True)
+        ]
+        parent_chunks = self._load_parent_chunks(project_id, ranked_parent_ids[:top_k])
+        merged: List[Dict[str, Any]] = []
+        for parent_id in ranked_parent_ids:
+            if parent_id in parent_chunks:
+                merged.append(parent_chunks[parent_id])
+        merged.extend(reranked_results)
+        deduped: List[Dict[str, Any]] = []
+        seen_keys: set = set()
+        for item in merged:
+            key = self._build_merge_key(item)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped.append(item)
+            if len(deduped) >= top_k:
+                break
+        return deduped[:top_k]
+
     @traceable(name="rag_search", run_type="retriever")
     def search_with_status(
-        self, project_id: str, query: str, top_k: int = 5, user_id: str = ""
+        self,
+        project_id: str,
+        query: str,
+        top_k: int = 5,
+        user_id: str = "",
+        messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         混合检索总入口 - 完整流程
@@ -638,7 +774,11 @@ class RAGService:
 
         try:
             # 步骤1：查询改写与扩写
-            expanded_queries = query_rewriter.rewrite_and_expand(original_query)
+            expanded_queries = query_rewriter.rewrite_and_expand(
+                original_query,
+                max_variants=3,
+                messages=messages,
+            )
             app_logger.info(
                 "rag_query_expanded original='{}' expanded_count={}",
                 original_query[:50],
@@ -648,28 +788,35 @@ class RAGService:
             all_keyword_results: List[Dict] = []
             all_vector_results: List[Dict] = []
             vector_status = "no_context"
+            query_results = []
+            try:
+                async def _run_queries() -> List[Dict[str, Any]]:
+                    tasks = [
+                        asyncio.to_thread(
+                            self._retrieve_for_query,
+                            project_id,
+                            current_query,
+                            top_k,
+                        )
+                        for current_query in expanded_queries
+                    ]
+                    return await asyncio.gather(*tasks)
 
-            # 步骤2：对每个改写查询执行并行检索
-            for current_query in expanded_queries:
-                parallel = RunnableParallel(
-                    keyword=RunnableLambda(
-                        lambda x: self._keyword_search(project_id, x["query"], top_k)
-                    ),
-                    vector=RunnableLambda(
-                        lambda x: self._vector_search(project_id, x["query"], top_k)
-                    ),
-                )
-                retrieval = parallel.invoke({"query": current_query})
-                keyword_hits = retrieval.get("keyword") if isinstance(retrieval, dict) else []
-                vector_result = retrieval.get("vector") if isinstance(retrieval, dict) else ("no_context", [])
-                if isinstance(keyword_hits, list):
-                    all_keyword_results.extend(keyword_hits)
-                if isinstance(vector_result, tuple) and len(vector_result) == 2:
-                    current_status, vector_hits = vector_result
-                    if current_status in ("success", "fallback"):
-                        vector_status = current_status
-                    if isinstance(vector_hits, list):
-                        all_vector_results.extend(vector_hits)
+                query_results = asyncio.run(_run_queries())
+            except RuntimeError:
+                for current_query in expanded_queries:
+                    query_results.append(
+                        self._retrieve_for_query(project_id, current_query, top_k)
+                    )
+
+            for entry in query_results:
+                keyword_hits = entry.get("keyword_hits") or []
+                all_keyword_results.extend(keyword_hits)
+                current_status = str(entry.get("vector_status") or "no_context")
+                if current_status in ("success", "fallback", "embedding_unavailable"):
+                    vector_status = current_status
+                vector_hits = entry.get("vector_hits") or []
+                all_vector_results.extend(vector_hits)
 
             # 步骤3：结果融合（RRF）
             fused_results = self._fuse_results(
@@ -680,6 +827,11 @@ class RAGService:
             reranked_results = reranker.rerank(
                 original_query, fused_results, top_k=top_k
             )
+            final_results = self._apply_parent_document_strategy(
+                project_id=project_id,
+                reranked_results=reranked_results,
+                top_k=top_k,
+            )
 
             app_logger.info(
                 "rag_search_complete project={} query='{}' "
@@ -689,11 +841,11 @@ class RAGService:
                 len(expanded_queries),
                 len(all_keyword_results),
                 len(all_vector_results),
-                len(reranked_results)
+                len(final_results)
             )
 
-            if reranked_results:
-                return {"status": "success", "data": reranked_results}
+            if final_results:
+                return {"status": "success", "data": final_results}
 
             if vector_status == "embedding_unavailable":
                 return {"status": "embedding_unavailable", "data": []}

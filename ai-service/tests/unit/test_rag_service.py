@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from app.services.rag_service import RAGService
+from app.utils.markdown_parent_child_chunking import markdown_parent_child_chunker
 
 TEST_PROJECT_ID = "unit-test-project"
 
@@ -103,3 +104,60 @@ def test_project_isolation():
     result_a = service.search_with_status(project_a, "项目A", top_k=3)
     assert "data" in result_a
     assert "data" in result_b
+
+
+def test_add_document_with_empty_list_metadata():
+    service = RAGService()
+    result = service.add_document(
+        project_id=TEST_PROJECT_ID,
+        doc_id="test-doc-meta-empty-list",
+        doc_type="manual",
+        doc_name="空列表元数据文档",
+        documents=[
+            {
+                "content": "文档内容",
+                "metadata": {"parent_titles": [], "tags": ["a", "b"]},
+            }
+        ],
+        user_id="test-user",
+    )
+    assert result.get("indexed") is True
+    assert result.get("error") in {"", None}
+
+
+def test_real_markdown_files_should_keep_parent_child_retrieval():
+    service = RAGService()
+    base = Path(
+        r"c:\Users\hanbin\main\Core\DevHome\m2.5\TestPlatform\platform-backend\assets\backend相关说明(按需了解即可)"
+    )
+    files = [
+        ("接口说明.md", "real-md-api"),
+        ("系统功能结构图.md", "real-md-arch"),
+        ("PRD.md", "real-md-prd"),
+    ]
+    for file_name, doc_id in files:
+        content = (base / file_name).read_text(encoding="utf-8")
+        chunks = markdown_parent_child_chunker.split(content)
+        add_result = service.add_document(
+            project_id=TEST_PROJECT_ID,
+            doc_id=doc_id,
+            doc_type="manual",
+            doc_name=file_name,
+            documents=chunks,
+            user_id="test-user",
+        )
+        assert add_result.get("indexed") is True
+
+    result = service.search_with_status(
+        project_id=TEST_PROJECT_ID,
+        query="系统整体架构图包含哪些模块",
+        top_k=5,
+        messages=[{"role": "user", "content": "我在看系统功能结构图"}],
+    )
+    assert result.get("status") in {"success", "no_context", "fallback"}
+    data = result.get("data") or []
+    if data:
+        assert all(isinstance(item.get("metadata"), dict) for item in data)
+        assert any(
+            (item.get("metadata") or {}).get("chunk_role") == "parent" for item in data
+        )

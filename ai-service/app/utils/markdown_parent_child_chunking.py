@@ -1,280 +1,254 @@
 """
-Markdown父子分块模块
+Markdown文档分块模块
 
 职责：
-    1. 解析Markdown文档结构
-    2. 按标题层级分块
-    3. 维护父子关系
-    4. 支持元数据提取
+    1. 实现动态父子层级分块
+    2. 自动检测文档标题层级并确定父子关系
+    3. 适配项目RAG服务的父子召回策略
 
-分块策略：
-    1. 按标题层级分块：# ## ###
-    2. 父子关系维护：子块包含父块标题
-    3. 元数据提取：提取标题、层级等信息
+层级判断规则：
+    | 检测到的标题层级 | 父子设置 |
+    |----------------|---------|
+    | 2级（H1+H2） | H2作为父块 |
+    | 3级（H1+H2+H3） | H2作为父块，H3作为子块 |
+    | 4级（H1+H2+H3+H4） | H2作为父块，H3作为子块（含H4） |
+
+元数据字段：
+    - chunk_role: 块角色（parent=父块，child=子块）
+    - parent_chunk_id: 父块ID（子块专用）
+    - chunk_id: 块唯一ID
+    - H1/H2/H3/H4: 对应层级标题内容
 
 使用示例：
-    chunker = MarkdownParentChildChunker()
-    chunks = chunker.split(markdown_text)
-    # chunks = [{"content": "...", "metadata": {"level": 1, "title": "..."}}]
+    from app.utils.markdown_parent_child_chunking import markdown_parent_child_chunker
+
+    chunks = markdown_parent_child_chunker.split(markdown_text)
+    for chunk in chunks:
+        print(f"角色: {chunk.metadata['chunk_role']}")
+        print(f"标题: {chunk.metadata.get('H2') or chunk.metadata.get('H3')}")
 """
 
-from typing import List, Dict, Any, Tuple
-import re
+import hashlib
+from typing import List, Optional, Set
+from langchain_core.documents import Document
+from langchain_text_splitters import MarkdownHeaderTextSplitter
 
 
-class MarkdownParentChildChunker:
+class MarkdownParentChunker:
     """
-    Markdown父子分块器
+    Markdown动态父子分块器
 
-    职责：
-        - 解析Markdown文档结构
-        - 按标题层级分块
-        - 维护父子关系
-        - 提取元数据
+    核心特性：
+        - 自动检测文档标题层级
+        - 动态确定父子关系
+        - 支持H1-H4任意组合
 
-    分块规则：
-        1. 按# ## ###等标题分割
-        2. 子块包含父块标题作为上下文
-        3. 提取标题层级和名称作为元数据
+    层级判断：
+        - 2级标题：H1+H2 → H2为父块
+        - 3级标题：H1+H2+H3 → H2为父，H3为子
+        - 4级标题：H1+H2+H3+H4 → H2为父，H3为子（含H4）
     """
 
-    def __init__(self, max_chunk_size: int = 1000):
+    def __init__(
+        self,
+        headers_to_split_on: Optional[List[tuple]] = None,
+    ):
+        self.headers_to_split_on = headers_to_split_on or [
+            ("#", "H1"),
+            ("##", "H2"),
+            ("###", "H3"),
+            ("####", "H4"),
+        ]
+
+        self.splitter = MarkdownHeaderTextSplitter(
+            headers_to_split_on=self.headers_to_split_on,
+            strip_headers=False,
+        )
+
+    def _detect_header_levels(self, raw_docs: List[Document]) -> Set[str]:
+        """检测文档中实际存在的标题层级"""
+        levels = set()
+        for doc in raw_docs:
+            metadata = doc.metadata
+            for level in ["H1", "H2", "H3", "H4"]:
+                if metadata.get(level):
+                    levels.add(level)
+        return levels
+
+    def _determine_parent_child_levels(self, levels: Set[str]) -> tuple:
         """
-        初始化Markdown分块器
+        根据检测到的层级确定父子关系
 
-        @param max_chunk_size: 最大块大小
+        @param levels: 检测到的标题层级集合
+        @return: (父层级, 子层级)
         """
-        self.max_chunk_size = max_chunk_size
-        self.heading_pattern = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
+        sorted_levels = sorted(levels, key=lambda x: int(x[1:]))
 
-    def split(self, text: str) -> List[Dict[str, Any]]:
+        if len(sorted_levels) >= 3:
+            return ("H2", "H3")
+        elif "H2" in sorted_levels:
+            return ("H2", None)
+        elif "H1" in sorted_levels:
+            return ("H1", None)
+        else:
+            return (None, None)
+
+    def split(self, text: str) -> List[Document]:
         """
-        分割Markdown文本
+        分割Markdown文档
 
-        实现步骤：
-            1. 解析所有标题
-            2. 按标题分割内容
-            3. 构建父子关系
-            4. 生成带元数据的块
+        实现逻辑：
+            1. 使用LangChain解析Markdown
+            2. 检测实际标题层级
+            3. 动态确定父子关系
+            4. 构建块结构
 
-        @param text: Markdown文本
-        @return: 块列表（包含content和metadata）
-
-        返回格式：
-            [
-                {
-                    "content": "块内容",
-                    "metadata": {
-                        "level": 2,
-                        "title": "标题",
-                        "parent_titles": ["父标题"]
-                    }
-                }
-            ]
+        @param text: Markdown原始文本
+        @return: Document列表（父块+子块）
         """
-        if not text:
+        if not text or not text.strip():
             return []
 
-        # 解析标题
-        headings = self._parse_headings(text)
+        raw_docs = self.splitter.split_text(text)
 
-        if not headings:
-            # 没有标题，整个文本作为一个块
-            return [{"content": text.strip(), "metadata": {"level": 0, "title": ""}}]
+        levels = self._detect_header_levels(raw_docs)
+        parent_level, child_level = self._determine_parent_child_levels(levels)
 
-        # 按标题分割
-        sections = self._split_by_headings(text, headings)
+        chunks: List[Document] = []
+        current_h1 = ""
+        current_h2 = ""
+        current_h3 = ""
+        current_parent_content_parts: List[str] = []
+        parent_chunk_id = ""
 
-        # 构建带父子关系的块
-        chunks = self._build_chunks_with_hierarchy(sections)
+        def _make_chunk_id(*args) -> str:
+            seed = "|".join(str(a)[:50] for a in args).encode("utf-8", errors="ignore")
+            return hashlib.md5(seed).hexdigest()[:16]
 
-        return chunks
+        def _flush_parent():
+            """输出当前父块"""
+            nonlocal chunks, current_parent_content_parts, parent_chunk_id
+            if not parent_chunk_id:
+                return
 
-    def _parse_headings(self, text: str) -> List[Tuple[int, str, int]]:
-        """
-        解析所有标题
-
-        @param text: Markdown文本
-        @return: [(层级, 标题, 位置), ...]
-        """
-        headings = []
-        for match in self.heading_pattern.finditer(text):
-            level = len(match.group(1))
-            title = match.group(2).strip()
-            position = match.start()
-            headings.append((level, title, position))
-        return headings
-
-    def _split_by_headings(
-        self, text: str, headings: List[Tuple[int, str, int]]
-    ) -> List[Dict[str, Any]]:
-        """按标题分割文本"""
-        sections = []
-
-        for i, (level, title, position) in enumerate(headings):
-            # 确定当前部分的结束位置
-            if i + 1 < len(headings):
-                end_pos = headings[i + 1][2]
-            else:
-                end_pos = len(text)
-
-            # 提取内容
-            content = text[position:end_pos].strip()
-
-            sections.append({
-                "level": level,
-                "title": title,
-                "content": content,
-            })
-
-        return sections
-
-    def _build_chunks_with_hierarchy(
-        self, sections: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """构建带层级关系的块"""
-        chunks = []
-        parent_stack: List[Tuple[int, str]] = []  # (层级, 标题)
-
-        for section in sections:
-            level = section["level"]
-            title = section["title"]
-            content = section["content"]
-
-            # 更新父标题栈
-            while parent_stack and parent_stack[-1][0] >= level:
-                parent_stack.pop()
-
-            # 构建父标题列表
-            parent_titles = [p[1] for p in parent_stack]
-
-            # 构建完整内容（包含父标题上下文）
-            if parent_titles:
-                context = " > ".join(parent_titles)
-                full_content = f"上下文: {context}\n\n{content}"
-            else:
-                full_content = content
-
-            # 如果内容过长，进一步分割
-            if len(full_content) > self.max_chunk_size:
-                sub_chunks = self._split_large_content(
-                    full_content, level, title, parent_titles
-                )
-                chunks.extend(sub_chunks)
-            else:
-                chunks.append({
-                    "content": full_content,
-                    "metadata": {
-                        "level": level,
-                        "title": title,
-                        "parent_titles": parent_titles,
-                    },
-                })
-
-            # 将当前标题加入父栈
-            parent_stack.append((level, title))
-
-        return chunks
-
-    def _split_large_content(
-        self,
-        content: str,
-        level: int,
-        title: str,
-        parent_titles: List[str],
-    ) -> List[Dict[str, Any]]:
-        """分割过大的内容"""
-        chunks = []
-
-        # 按段落分割
-        paragraphs = content.split('\n\n')
-        current_chunk = ""
-
-        for para in paragraphs:
-            if len(current_chunk) + len(para) > self.max_chunk_size:
-                if current_chunk:
-                    chunks.append({
-                        "content": current_chunk.strip(),
-                        "metadata": {
-                            "level": level,
-                            "title": title,
-                            "parent_titles": parent_titles,
+            parent_content = "\n\n".join(current_parent_content_parts).strip()
+            if parent_content:
+                chunks.append(
+                    Document(
+                        page_content=parent_content,
+                        metadata={
+                            "chunk_role": "parent",
+                            "parent_chunk_id": "",
+                            "chunk_id": parent_chunk_id,
+                            "H1": current_h1,
+                            "H2": current_h2,
+                            "H3": "",
                         },
-                    })
-                current_chunk = para
-            else:
-                current_chunk += '\n\n' + para if current_chunk else para
+                    )
+                )
 
-        # 添加最后一个块
-        if current_chunk:
-            chunks.append({
-                "content": current_chunk.strip(),
-                "metadata": {
-                    "level": level,
-                    "title": title,
-                    "parent_titles": parent_titles,
-                },
-            })
+            parent_chunk_id = ""
+            current_parent_content_parts = []
+
+        for doc in raw_docs:
+            metadata = doc.metadata.copy()
+            content = doc.page_content.strip()
+
+            h1 = metadata.get("H1", "")
+            h2 = metadata.get("H2", "")
+            h3 = metadata.get("H3", "")
+            h4 = metadata.get("H4", "")
+
+            if h1:
+                _flush_parent()
+                current_h1 = h1
+                current_h2 = ""
+                current_h3 = ""
+
+            if parent_level == "H2":
+                if h2:
+                    _flush_parent()
+                    current_h2 = h2
+                    parent_chunk_id = _make_chunk_id(current_h1, h2, "", content)
+                    current_parent_content_parts = [content]
+
+                elif h3 and child_level == "H3":
+                    if not current_h2:
+                        current_h2 = "全文"
+                        parent_chunk_id = _make_chunk_id(
+                            current_h1, "全文", "", content
+                        )
+
+                    child_content = f"### {h3}\n\n{content}" if h4 else content
+                    child_id = _make_chunk_id(current_h1, current_h2, h3, content)
+
+                    chunks.append(
+                        Document(
+                            page_content=content,
+                            metadata={
+                                "chunk_role": "child",
+                                "parent_chunk_id": parent_chunk_id,
+                                "chunk_id": child_id,
+                                "H1": current_h1,
+                                "H2": current_h2,
+                                "H3": h3,
+                            },
+                        )
+                    )
+                    current_parent_content_parts.append(child_content)
+
+                elif content:
+                    if current_h2:
+                        current_parent_content_parts.append(content)
+                    elif current_h1:
+                        current_parent_content_parts.append(content)
+                    else:
+                        current_h1 = "未命名文档"
+                        current_parent_content_parts.append(content)
+
+            elif parent_level == "H1":
+                if h1:
+                    if current_h1 and current_parent_content_parts:
+                        _flush_parent()
+                    if not current_h1:
+                        current_h1 = h1
+                        parent_chunk_id = _make_chunk_id(h1, "", "", content)
+                        current_parent_content_parts = [content]
+                    else:
+                        current_parent_content_parts.append(content)
+                elif content:
+                    current_parent_content_parts.append(content)
+
+            else:
+                if content:
+                    current_h1 = current_h1 or "未命名文档"
+                    if not parent_chunk_id:
+                        parent_chunk_id = _make_chunk_id(current_h1, "", "", content)
+                    current_parent_content_parts.append(content)
+
+        _flush_parent()
+
+        if not chunks and current_parent_content_parts:
+            parent_content = "\n\n".join(current_parent_content_parts).strip()
+            if parent_content:
+                chunks.append(
+                    Document(
+                        page_content=parent_content,
+                        metadata={
+                            "chunk_role": "parent",
+                            "parent_chunk_id": "",
+                            "chunk_id": _make_chunk_id(
+                                current_h1, "", "", parent_content
+                            ),
+                            "H1": current_h1,
+                            "H2": "",
+                            "H3": "",
+                        },
+                    )
+                )
 
         return chunks
 
 
-# 全局分块器实例
-markdown_parent_child_chunker = MarkdownParentChildChunker()
-
-
-if __name__ == "__main__":
-    """Markdown分块器调试"""
-    print("=" * 60)
-    print("Markdown父子分块器调试")
-    print("=" * 60)
-
-    # 测试数据
-    test_markdown = """
-# API文档
-
-## 用户模块
-
-### 登录接口
-用户登录接口说明。
-
-请求参数：
-- username: 用户名
-- password: 密码
-
-响应参数：
-- token: 认证令牌
-- userId: 用户ID
-
-### 注册接口
-用户注册接口说明。
-
-## 订单模块
-
-### 创建订单
-创建订单接口说明。
-
-### 查询订单
-查询订单接口说明。
-"""
-
-    # 测试分块
-    print("\n1. Markdown分块测试:")
-    chunker = MarkdownParentChildChunker(max_chunk_size=500)
-    chunks = chunker.split(test_markdown)
-
-    print(f"   原文长度: {len(test_markdown)} 字符")
-    print(f"   分块数量: {len(chunks)}")
-
-    for i, chunk in enumerate(chunks, 1):
-        metadata = chunk["metadata"]
-        print(f"\n   块{i}:")
-        print(f"      标题: {metadata['title']}")
-        print(f"      层级: {metadata['level']}")
-        print(f"      父标题: {metadata['parent_titles']}")
-        print(f"      内容长度: {len(chunk['content'])} 字符")
-        print(f"      内容预览: {chunk['content'][:60]}...")
-
-    print("\n" + "=" * 60)
-    print("调试完成")
-    print("=" * 60)
+markdown_chunker = MarkdownParentChunker()
+markdown_parent_child_chunker = markdown_chunker

@@ -90,32 +90,3 @@ async def chat_stream(request: ChatRequestModel, raw_request: Request):
             "X-Accel-Buffering": "no",  # 禁用Nginx缓冲，确保实时推送
         },
     )
-
-
-if __name__ == "__main__":
-    """
-    对话路由调试代码
-
-    调试说明：
-        1. 启动服务后，可使用 curl 测试 SSE 流式输出
-        2. 注意：此处仅为演示，实际需要完整的 token 认证
-
-    测试命令示例：
-        curl -X POST http://localhost:8001/ai/chat/stream \\
-        -H "Content-Type: application/json" \\
-        -H "token: <your-token>" \\
-        -d '{"project_id": "test-project", "message": "你好", "use_rag": true}'
-    """
-    print("=" * 60)
-    print("AI对话路由调试")
-    print("=" * 60)
-    print("\n接口信息：")
-    print("  - URL: POST /ai/chat/stream")
-    print("  - Content-Type: application/json")
-    print("\n请求示例：")
-    print('  {"project_id": "test-project", "message": "你好", "use_rag": true}')
-    print("\n响应格式（SSE事件流）：")
-    print('  {"type": "content", "delta": "..."}')
-    print('  {"type": "case", "case": {...}, "api_ids": [...]}')
-    print('  {"type": "end"}')
-    print("=" * 60)

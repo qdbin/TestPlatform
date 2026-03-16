@@ -30,6 +30,7 @@ Agent服务模块 - LangChain 1.x LCEL版本
 from __future__ import annotations
 
 import json
+import asyncio
 from typing import Any, Dict, List, Optional, AsyncIterator, Iterator
 
 from langchain_core.runnables import RunnableLambda, RunnableParallel
@@ -37,7 +38,6 @@ from langchain_core.runnables import RunnableLambda, RunnableParallel
 from app.config import config
 from app.services.llm_service import llm_service
 from app.services.rag_service import rag_service
-from app.services.retrieval import query_rewriter
 from app.services.case_workflow import CaseGenerationWorkflow, CaseWorkflowContext
 from app.schemas import CaseRequestModel, ApiSelectionResult
 from app.prompts import (
@@ -63,13 +63,13 @@ class AgentService:
 
     核心流程：
         1. stream_chat: 流式对话入口
-           - 识别用例需求
-           - 分流到用例生成或问答
+            - 识别用例需求
+            - 分流到用例生成或问答
         2. generate_case: 用例生成
-           - 选择接口
-           - 执行工作流
+            - 选择接口
+            - 执行工作流
         3. _select_api_ids: 接口选择
-           - LLM选择 + 关键词回退
+            - LLM选择 + 关键词回退
     """
 
     def __init__(self):
@@ -114,6 +114,8 @@ class AgentService:
         messages = messages or []
         is_case_request = self._is_case_request(message)
 
+        yield {"type": "start"}
+
         # 用例生成需求
         if is_case_request:
             result = self.generate_case(
@@ -145,24 +147,26 @@ class AgentService:
         # 问答需求 - 执行RAG检索
         rag_context = ""
         if use_rag:
-            rag_results = rag_service.search(
-                project_id, message, top_k=5, user_id=user_id
+            rag_result = await asyncio.to_thread(
+                rag_service.search_with_status,
+                project_id,
+                message,
+                5,
+                user_id,
+                messages,
+            )
+            rag_results = (
+                rag_result.get("data", []) if isinstance(rag_result, dict) else []
             )
             if rag_results:
                 rag_context = "\n\n".join(
-                    [
-                        str(item.get("content") or "")
-                        for item in rag_results[:3]
-                        if item
-                    ]
+                    [str(item.get("content") or "") for item in rag_results[:3] if item]
                 )
 
         # 构建Prompt
         system_prompt = ASSISTANT_ROLE_PROMPT
         if rag_context:
-            system_prompt += (
-                f"\n\n以下是相关知识库内容供参考：\n{rag_context}\n\n请基于以上知识回答用户问题。"
-            )
+            system_prompt += f"\n\n以下是相关知识库内容供参考：\n{rag_context}\n\n请基于以上知识回答用户问题。"
 
         # 构建消息列表
         chat_messages = [{"role": "user", "content": message}]
@@ -170,7 +174,7 @@ class AgentService:
             chat_messages = messages + chat_messages
 
         # 流式生成
-        for chunk in llm_service.chat_with_stream(chat_messages, system_prompt):
+        async for chunk in llm_service.achat_with_stream(chat_messages, system_prompt):
             yield {"type": "content", "delta": chunk}
 
         yield {"type": "end"}
@@ -461,10 +465,12 @@ class AgentService:
             # 添加依赖关系
             if api_id in api_relations:
                 for dep_id in api_relations[api_id]:
-                    normalized_step["relation"].append({
-                        "apiId": dep_id,
-                        "type": "pre",
-                    })
+                    normalized_step["relation"].append(
+                        {
+                            "apiId": dep_id,
+                            "type": "pre",
+                        }
+                    )
 
             normalized["caseApis"].append(normalized_step)
 
@@ -548,9 +554,24 @@ if __name__ == "__main__":
     # 测试关键词选择
     print("\n2. 关键词选择接口测试:")
     test_apis = [
-        {"id": "api-1", "name": "用户登录", "path": "/api/login", "description": "用户登录接口"},
-        {"id": "api-2", "name": "用户注册", "path": "/api/register", "description": "用户注册接口"},
-        {"id": "api-3", "name": "获取用户信息", "path": "/api/user/info", "description": "获取用户信息"},
+        {
+            "id": "api-1",
+            "name": "用户登录",
+            "path": "/api/login",
+            "description": "用户登录接口",
+        },
+        {
+            "id": "api-2",
+            "name": "用户注册",
+            "path": "/api/register",
+            "description": "用户注册接口",
+        },
+        {
+            "id": "api-3",
+            "name": "获取用户信息",
+            "path": "/api/user/info",
+            "description": "获取用户信息",
+        },
     ]
     selected = agent_service._keyword_select_apis("登录功能测试", test_apis)
     print(f"   需求: '登录功能测试'")

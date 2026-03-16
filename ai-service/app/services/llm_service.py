@@ -29,10 +29,9 @@ import os
 os.environ.pop("OPENAI_PROXY", None)
 
 from langchain_openai import ChatOpenAI
+from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
-from langchain_core.runnables import RunnableSerializable
 from langsmith import trace
 
 from app.config import config
@@ -80,21 +79,25 @@ class LLMService:
             "max_tokens": config.llm_max_tokens,
             "streaming": streaming,
         }
-
-        if self._provider in ("deepseek", "openai"):
+        base_url = config.llm_base_url
+        if self._provider == "qwen":
+            base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        try:
+            return init_chat_model(
+                model=config.llm_model,
+                model_provider="openai",
+                api_key=config.llm_api_key,
+                base_url=base_url,
+                temperature=config.llm_temperature,
+                max_tokens=config.llm_max_tokens,
+                streaming=streaming,
+            )
+        except Exception:
             return ChatOpenAI(
                 **common_params,
                 api_key=config.llm_api_key,
-                base_url=config.llm_base_url,
+                base_url=base_url,
             )
-        elif self._provider == "qwen":
-            return ChatOpenAI(
-                **common_params,
-                api_key=config.llm_api_key,
-                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            )
-        else:
-            raise ValueError(f"Unknown LLM provider: {self._provider}")
 
     def _get_llm(self) -> Optional[ChatOpenAI]:
         """延迟获取LLM实例（非流式）"""

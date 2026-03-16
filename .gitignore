@@ -8,7 +8,7 @@
 .vscode/
 **/target/
 
-
+data/
 *.iws
 *.iml
 *.ipr
@@ -17,3 +17,5 @@ data
 TestEngin/
 个人简历（260126）.md
 **/.pytest_cache
+.todo/
+.personal/

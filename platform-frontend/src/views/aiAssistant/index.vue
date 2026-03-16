@@ -593,21 +593,28 @@ export default defineComponent({
         let lastEventAt = Date.now();
         const idleTimeoutMs = 120000;
         const readWithTimeout = () =>
-          Promise.race([
-            reader.read(),
-            new Promise((_, reject) =>
-              setTimeout(() => {
-                const idle = Date.now() - lastEventAt;
-                reject(
-                  new Error(
-                    idle >= idleTimeoutMs
-                      ? "流式响应超时，请重试"
-                      : "流式响应中断，请重试"
-                  )
-                );
-              }, idleTimeoutMs)
-            ),
-          ]);
+          new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+              const idle = Date.now() - lastEventAt;
+              reject(
+                new Error(
+                  idle >= idleTimeoutMs
+                    ? "流式响应超时，请重试"
+                    : "流式响应中断，请重试"
+                )
+              );
+            }, idleTimeoutMs);
+            reader
+              .read()
+              .then((result) => {
+                clearTimeout(timer);
+                resolve(result);
+              })
+              .catch((error) => {
+                clearTimeout(timer);
+                reject(error);
+              });
+          });
         while (true) {
           const readResult = await readWithTimeout();
           if (readResult.done) break;
@@ -617,8 +624,8 @@ export default defineComponent({
           const parsed = parseSsePayload(sseBuffer);
           sseBuffer = parsed.rest;
           for (const data of parsed.events) {
+            lastEventAt = Date.now();
             if (data.type === "content" && data.delta) {
-              lastEventAt = Date.now();
               const last = sendingMessages[sendingMessages.length - 1];
               if (last && last.role === "assistant") {
                 last.content += data.delta;
@@ -626,7 +633,6 @@ export default defineComponent({
                 scrollToBottom();
               }
             } else if (data.type === "case" && data.case) {
-              lastEventAt = Date.now();
               const last = sendingMessages[sendingMessages.length - 1];
               if (last) {
                 last.caseData = data.case;
@@ -644,7 +650,6 @@ export default defineComponent({
             } else if (data.type === "error") {
               throw new Error(data.message || "AI服务错误");
             } else if (data.type === "end") {
-              lastEventAt = Date.now();
               reachEnd = true;
               break;
             }

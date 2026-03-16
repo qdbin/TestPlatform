@@ -60,6 +60,32 @@ class PlatformClient:
             headers["token"] = self.token
         return headers
 
+    def _unwrap_data(self, payload: Any) -> Any:
+        """兼容后端统一响应包装，提取真实数据"""
+        current = payload
+        for _ in range(4):
+            if not isinstance(current, dict):
+                return current
+            if "data" in current:
+                current = current.get("data")
+                continue
+            return current
+        return current
+
+    def _extract_list(self, payload: Any) -> List[Dict[str, Any]]:
+        """从后端返回中提取列表数据"""
+        data = self._unwrap_data(payload)
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            if isinstance(data.get("list"), list):
+                return [item for item in data.get("list", []) if isinstance(item, dict)]
+            if isinstance(data.get("rows"), list):
+                return [item for item in data.get("rows", []) if isinstance(item, dict)]
+            if isinstance(data.get("data"), list):
+                return [item for item in data.get("data", []) if isinstance(item, dict)]
+        return []
+
     def get_api_list(self, project_id: str) -> List[Dict[str, Any]]:
         """
         获取项目接口列表
@@ -77,21 +103,22 @@ class PlatformClient:
             ]
         """
         try:
-            url = f"{self.base_url}/autotest/api/list"
-            params = {"projectId": project_id}
-
-            response = httpx.get(
+            url = f"{self.base_url}/autotest/api/list/1/2000"
+            response = httpx.post(
                 url,
-                params=params,
+                json={"projectId": project_id},
                 headers=self._get_headers(),
                 timeout=self.timeout,
             )
 
             if response.status_code == 200:
                 data = response.json()
-                if isinstance(data, dict) and "data" in data:
-                    return data.get("data") or []
-                return data if isinstance(data, list) else []
+                items = self._extract_list(data)
+                if items:
+                    self._last_error = None
+                else:
+                    self._last_error = "接口列表为空或结构异常"
+                return items
             else:
                 self._last_error = f"API列表获取失败: HTTP {response.status_code}"
                 app_logger.error("{}", self._last_error)
@@ -134,9 +161,8 @@ class PlatformClient:
 
             if response.status_code == 200:
                 data = response.json()
-                if isinstance(data, dict) and "data" in data:
-                    return data.get("data")
-                return data if isinstance(data, dict) else None
+                detail = self._unwrap_data(data)
+                return detail if isinstance(detail, dict) else None
             else:
                 app_logger.error("接口详情获取失败: HTTP {}", response.status_code)
                 return None
@@ -155,7 +181,7 @@ class PlatformClient:
         @return: 用例Schema
         """
         try:
-            url = f"{self.base_url}/autotest/case/schema"
+            url = f"{self.base_url}/autotest/ai/schema/case"
             params = {"projectId": project_id}
 
             response = httpx.get(
@@ -167,9 +193,8 @@ class PlatformClient:
 
             if response.status_code == 200:
                 data = response.json()
-                if isinstance(data, dict) and "data" in data:
-                    return data.get("data")
-                return data if isinstance(data, dict) else None
+                schema = self._unwrap_data(data)
+                return schema if isinstance(schema, dict) else None
             else:
                 app_logger.error("用例Schema获取失败: HTTP {}", response.status_code)
                 return None
