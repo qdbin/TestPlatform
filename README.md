@@ -19,6 +19,7 @@ AI智能接口测试平台是一款基于 **LangChain + Pytest** 的低代码分
 | **实时通信** | WebSocket双向通信，任务实时推送与结果回传 |
 | **定时任务** | 支持Cron表达式配置定时执行计划 |
 | **RBAC权限** | 基于角色的权限控制，支持多项目数据隔离 |
+| **CLI工具** | Agent友好的命令行工具，赋能Claude Code自动化操作 |
 
 ### 1.3 技术架构
 
@@ -85,8 +86,9 @@ flowchart TB
 | 向量数据库 | Chroma | - | 轻量级向量数据库 |
 | 测试引擎 | Python | 3.8+ | 测试执行引擎 |
 | 测试框架 | Pytest | - | API测试框架 |
+| CLI工具 | Typer + Rich | 0.9.0+ | Agent友好命令行工具 |
 | 数据库 | MySQL | 5.7+ | 关系型数据库 |
-| HTTP客户端 | Requests | - | HTTP请求处理 |
+| HTTP客户端 | Requests/httpx | - | HTTP请求处理 |
 
 ---
 
@@ -301,6 +303,31 @@ TestPlatform/
 │   └── config/
 │       └── config.ini         # 引擎配置
 │
+├── cli/                       # CLI命令行工具 (Python)
+│   ├── solution/              # CLI服务实现
+│   │   ├── files/
+│   │   │   ├── src/testplatform/
+│   │   │   │   ├── main.py    # CLI入口
+│   │   │   │   ├── config.py  # 配置管理
+│   │   │   │   ├── commands/  # 命令模块
+│   │   │   │   │   ├── auth.py      # 认证管理
+│   │   │   │   │   ├── user.py      # 用户管理
+│   │   │   │   │   ├── project.py   # 项目管理
+│   │   │   │   │   ├── env.py       # 环境管理
+│   │   │   │   │   ├── module.py    # 模块管理
+│   │   │   │   │   ├── api.py       # 接口管理
+│   │   │   │   │   ├── case.py      # 用例管理
+│   │   │   │   │   ├── domain.py    # 域名服务
+│   │   │   │   │   └── common_param.py # 参数管理
+│   │   │   │   └── utils/
+│   │   │   │       └── http_client.py # HTTP客户端
+│   │   │   ├── pyproject.toml # 项目配置
+│   │   │   └── Skill.md       # Agent技能文档
+│   │   └── solve.sh           # 部署脚本
+│   └── tests/                 # 测试验证
+│       ├── test.sh            # 测试脚本
+│       └── test_outputs.py    # 端到端测试
+│
 └── README.md                  # 项目主文档
 ```
 
@@ -364,6 +391,34 @@ Vue 2.7前端应用，提供可视化操作界面：
 | **用例中心** | API用例可视化编辑 |
 | **计划中心** | 测试计划配置、定时任务 |
 | **测试报告** | 执行结果查看、详情分析 |
+
+### 4.5 CLI命令行工具 ([cli/README.md](./cli/README.md))
+
+基于Typer + Rich构建的Agent友好CLI工具，赋能Claude Code等Agent自动化操作平台：
+
+| 功能 | 说明 |
+|------|------|
+| **Agent赋能** | 通过Skill.md文档让Agent理解并调用平台接口 |
+| **全链路管理** | 用户、项目、环境、模块、接口、用例完整生命周期 |
+| **自动认证** | Token自动注入与刷新，Base64密码编码 |
+| **场景用例** | 购物车等端到端场景用例一键生成 |
+
+**核心命令：**
+```bash
+# 登录平台
+testplatform login -a <account> -p <password>
+
+# 项目管理
+testplatform project create -n "项目名称"
+
+# 购物车场景用例
+testplatform case shopping-cart -p <project_id>
+```
+
+**Agent调用流程：**
+```
+用户需求 → Claude Code阅读Skill.md → 理解CLI命令 → 执行自动化操作 → 平台后端响应
+```
 
 ---
 
@@ -503,6 +558,13 @@ pip3 install -r requirements.txt
 python3 startup.py
 ```
 
+**6. 安装CLI工具（可选）**
+```bash
+cd cli/solution/files
+pip install -e .
+testplatform --help
+```
+
 ### 6.3 访问平台
 
 - **本地访问**：http://localhost:5173
@@ -563,6 +625,23 @@ python3 startup.py
    - 调用链可视化
    - 性能监控
 
+### 7.4 CLI工具亮点
+
+1. **Agent赋能设计**
+   - 通过Skill.md文档赋能Claude Code等Agent自动调用平台接口
+   - 模块化命令设计，覆盖用户/项目/环境/接口/用例全链路管理
+   - 端到端场景用例一键生成（如购物车场景）
+
+2. **自动认证机制**
+   - httpx客户端封装实现Token自动注入与刷新
+   - Base64密码编码传输，配置状态持久化
+   - Rich终端美化，表格/树形结构清晰展示
+
+3. **测试验证体系**
+   - 基于pytest的端到端测试，验证功能行为而非代码存在
+   - P0/P1优先级分层测试，覆盖核心结构与功能
+   - 可执行性验收，确保CLI可导入、可运行
+
 ---
 
 ## 八、相关文档
@@ -573,6 +652,7 @@ python3 startup.py
 | 测试引擎文档 | [TestEngin/README.md](./TestEngin/README.md) |
 | 后端服务文档 | [platform-backend/README.md](./platform-backend/README.md) |
 | 前端服务文档 | [platform-frontend/README.md](./platform-frontend/README.md) |
+| CLI工具文档 | [cli/README.md](./cli/README.md) |
 
 ---
 
@@ -591,3 +671,5 @@ python3 startup.py
 - FastAPI - 高性能Web框架
 - SpringBoot - Java后端框架
 - Vue - 前端框架
+- Typer - CLI框架
+- Rich - 终端美化
